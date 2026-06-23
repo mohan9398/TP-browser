@@ -66,4 +66,4 @@ class ProcessSentinel(threading.Thread):
                 pass
                 
             # Scan interval
-            time.sleep(2.0)
+            time.sleep(59.0)

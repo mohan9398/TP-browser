@@ -161,13 +161,8 @@ class SecurePage(QWebEnginePage):
         return True # Accepted for now based on user requirements
  
     def javaScriptConsoleMessage(self, level, message, line, source):
-        # Capture JS errors related to getUserMedia/camera failing
-        import PyQt6.QtWebEngineCore as qtwc
-        WARN_OR_ERR = level == qtwc.QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel or level == qtwc.QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel
-        if "getUserMedia" in message or "camera" in message.lower() or "video" in message.lower() or "media" in message.lower() or WARN_OR_ERR:
-            lvl_str = "LOG"
-            if level == qtwc.QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel:
-                lvl_str = "WARNING"
-            elif level == qtwc.QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel:
-                lvl_str = "ERROR"
+        # Intentionally a no-op: suppresses Chromium's default console output to
+        # stderr (which ran on every page log/warn/error) with zero per-message
+        # work. Re-add lightweight handling here only if real diagnostics are needed.
+        return
  

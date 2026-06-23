@@ -64,6 +64,7 @@ class SecureBrowser(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
+        self._build_offline_overlay(central)
         self.setStyleSheet("""
             QMainWindow { background: #f9fafb; }
             QTabWidget::pane { border: none; background: #ffffff; border-top: 1px solid #e5e7eb; }
@@ -76,6 +77,111 @@ class SecureBrowser(QMainWindow):
             QPushButton:hover { background: #ebe4db; color: #3c3631; }
             QPushButton:pressed { background: #e0d8ce; }
         """)
+
+    def _build_offline_overlay(self, parent):
+        """A friendly 'check your connection' panel shown when a page fails to
+        load (e.g. Wi-Fi dropped). Hidden until needed, sits over the tabs."""
+        self.offline_overlay = QFrame(parent)
+        self.offline_overlay.setStyleSheet(
+            "QFrame { background: #f5f0eb; }"
+        )
+        ov = QVBoxLayout(self.offline_overlay)
+        ov.setContentsMargins(40, 40, 40, 40)
+        ov.addStretch()
+
+        card = QFrame()
+        card.setMaximumWidth(540)
+        card.setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #e6dace;"
+            " border-radius: 16px; }"
+        )
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(48, 44, 48, 44)
+        cl.setSpacing(14)
+
+        icon = QLabel("📡")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet("font-size: 52px;")
+
+        title = QLabel("Check your connection")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet(
+            "font-size: 22px; font-weight: 700; color: #292524;"
+            " font-family: 'Segoe UI', system-ui, sans-serif;"
+        )
+
+        msg = QLabel(
+            "We couldn't load the exam page. This is usually a Wi-Fi or "
+            "network problem — your exam is fine. Reconnect to a network and "
+            "try again."
+        )
+        msg.setWordWrap(True)
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setStyleSheet(
+            "font-size: 15px; color: #6b7280;"
+            " font-family: 'Segoe UI', system-ui, sans-serif;"
+        )
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_retry = QPushButton("↻ Try Again")
+        btn_retry.setStyleSheet(
+            "QPushButton { background: #292524; color: #fff; border: none;"
+            " border-radius: 8px; padding: 12px 26px; font-weight: 600;"
+            " font-size: 15px; } QPushButton:hover { background: #44403c; }"
+        )
+        btn_net = QPushButton("📶 Network")
+        btn_net.setStyleSheet(
+            "QPushButton { background: #ffffff; color: #5c544e;"
+            " border: 1px solid #e6dace; border-radius: 8px; padding: 12px 26px;"
+            " font-weight: 600; font-size: 15px; }"
+            " QPushButton:hover { background: #ebe4db; }"
+        )
+        btn_retry.clicked.connect(self._retry_load)
+        btn_net.clicked.connect(self.open_wifi)
+        btn_row.addWidget(btn_net)
+        btn_row.addWidget(btn_retry)
+        btn_row.addStretch()
+
+        cl.addWidget(icon)
+        cl.addWidget(title)
+        cl.addWidget(msg)
+        cl.addLayout(btn_row)
+
+        card_row = QHBoxLayout()
+        card_row.addStretch()
+        card_row.addWidget(card)
+        card_row.addStretch()
+        ov.addLayout(card_row)
+        ov.addStretch()
+
+        self.offline_overlay.hide()
+
+    def _position_overlay(self):
+        if not hasattr(self, "offline_overlay"):
+            return
+        # Cover the tab area (everything below the 60px toolbar).
+        parent = self.offline_overlay.parentWidget()
+        if parent:
+            self.offline_overlay.setGeometry(
+                0, 60, parent.width(), max(0, parent.height() - 60)
+            )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_overlay()
+
+    def _retry_load(self):
+        self.offline_overlay.hide()
+        self.reload_page()
+
+    def _on_load_finished(self, ok):
+        if ok:
+            self.offline_overlay.hide()
+        else:
+            self._position_overlay()
+            self.offline_overlay.raise_()
+            self.offline_overlay.show()
 
     def setup_clipboard_timer(self):
         self.clipboard = QApplication.clipboard()
@@ -136,6 +242,7 @@ class SecureBrowser(QMainWindow):
         page.featurePermissionRequested.connect(self.handle_permissions)
         page.titleChanged.connect(lambda t, v=view: self.update_tab_title(v, t))
         page.loadFinished.connect(lambda ok, p=page: self.inject_security_js(p))
+        page.loadFinished.connect(self._on_load_finished)
 
         idx = self.tabs.addTab(view, label)
         self.tabs.setCurrentIndex(idx)
