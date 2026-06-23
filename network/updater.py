@@ -6,6 +6,9 @@ import shutil
 import urllib.request
 import subprocess
 from secure_browser.core.config import APP_VERSION, UPDATE_CHECK_URL
+from secure_browser.core.logger import get_logger
+
+log = get_logger(__name__)
 
 class AutoUpdater:
     CHECK_TIMEOUT = 10
@@ -54,12 +57,13 @@ class AutoUpdater:
             remote_ver = AutoUpdater._version_tuple(latest_version)
 
             if remote_ver > current_ver:
+                log.info("Update available: %s -> %s", APP_VERSION, latest_version)
                 AutoUpdater._perform_update(download_url)
             else:
-                pass
+                log.debug("Already up to date (%s)", APP_VERSION)
 
-        except Exception as e:
-            pass
+        except Exception:
+            log.exception("Update check failed")
 
     @staticmethod
     def _perform_update(url: str):
@@ -73,9 +77,9 @@ class AutoUpdater:
             
             # Create batch script to swap files
             AutoUpdater._create_swap_script(target_path)
-            
-        except Exception as e:
-            pass
+
+        except Exception:
+            log.exception("Update download failed")
 
     @staticmethod
     def _create_swap_script(new_exe_path):
@@ -97,5 +101,5 @@ del "%~f0"
             # Execute and exit
             subprocess.Popen([bat_path], shell=True)
             sys.exit(0)
-        except Exception as e:
-            pass
+        except Exception:
+            log.exception("Failed to create/run update swap script")

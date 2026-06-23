@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
+import sys
 import time
 import threading
+import subprocess
 from PyQt6.QtCore import pyqtSignal, QObject
 import pywifi
 from pywifi import const
+from secure_browser.core.logger import get_logger
+
+log = get_logger(__name__)
 
 class WiFiManager(QObject):
     scan_complete = pyqtSignal(list)
@@ -12,6 +17,7 @@ class WiFiManager(QObject):
     def __init__(self):
         super().__init__()
         self._interface = None
+        self._cancel_scan = threading.Event()
         self._init_interface()
 
     def _init_interface(self):
@@ -21,28 +27,81 @@ class WiFiManager(QObject):
             if ifaces:
                 self._interface = ifaces[0]
             else:
-                pass
-        except Exception as e:
-            pass
+                log.warning("No Wi-Fi interface found")
+        except Exception:
+            log.exception("Failed to initialise Wi-Fi interface")
+
+    def get_saved_ssids(self) -> set:
+        """Return the set of SSIDs that already have a saved profile on this PC.
+
+        These can be reconnected with one click — the OS already holds the
+        credentials, so no password needs to be entered or shown.
+        """
+        if not self._interface:
+            return set()
+        try:
+            return {p.ssid for p in self._interface.network_profiles() if p.ssid}
+        except Exception:
+            return set()
+
+    @staticmethod
+    def get_saved_password(ssid: str) -> str:
+        """Windows-only: return the stored password for a saved network.
+
+        Uses `netsh wlan show profile name=<ssid> key=clear`. Note: Windows
+        only reveals the key when the process is running elevated (admin);
+        otherwise an empty string is returned.
+        """
+        if sys.platform != "win32" or not ssid:
+            return ""
+        try:
+            CREATE_NO_WINDOW = 0x08000000  # don't flash a console window
+            out = subprocess.check_output(
+                ["netsh", "wlan", "show", "profile", f"name={ssid}", "key=clear"],
+                stderr=subprocess.DEVNULL, text=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            for line in out.splitlines():
+                if "Key Content" in line:
+                    return line.split(":", 1)[1].strip()
+        except Exception:
+            log.exception("Could not read saved password for %s", ssid)
+        return ""
+
+    def cancel_scan(self):
+        """Abort an in-flight scan; the worker stops before emitting results."""
+        self._cancel_scan.set()
 
     def scan_async(self):
+        self._cancel_scan.clear()
         threading.Thread(target=self._scan_worker, daemon=True).start()
 
     def _scan_worker(self):
         if not self._interface:
             self.scan_complete.emit(["No Wi-Fi Adapter"])
             return
-            
+
         try:
             self._interface.scan()
-            time.sleep(3)
+            # Wait ~3s for results, but in small slices so the dialog can
+            # cancel the scan promptly instead of being stuck for the full wait.
+            for _ in range(30):
+                if self._cancel_scan.is_set():
+                    log.debug("Wi-Fi scan cancelled")
+                    return
+                time.sleep(0.1)
+
+            if self._cancel_scan.is_set():
+                return
+
             results = self._interface.scan_results()
-            
+
             # Filter and sort unique SSIDs
             ssids = sorted({r.ssid for r in results if r.ssid.strip()})
             self.scan_complete.emit(ssids if ssids else ["No Networks Found"])
-            
-        except Exception as e:
+
+        except Exception:
+            log.exception("Wi-Fi scan failed")
             self.scan_complete.emit(["Scan Failed"])
 
     def connect_async(self, ssid: str, password: str):
@@ -97,6 +156,7 @@ class WiFiManager(QObject):
                 time.sleep(0.5)
                 
             self.connect_complete.emit(False, "Connection timeout (Check password?)")
-            
+
         except Exception as e:
+            log.exception("Wi-Fi connect to %s failed", ssid)
             self.connect_complete.emit(False, f"Error: {str(e)}")
