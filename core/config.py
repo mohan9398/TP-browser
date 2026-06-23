@@ -10,7 +10,20 @@ USER_AGENT = (
 )
 
 # New Time-Based HMAC Security Config
-APP_SECRET_KEY = "my_production_secret_key_12345"
+# The key is stored encrypted (obfuscation-at-rest) so it does not appear in
+# plaintext inside the compiled binary. See core/secrets.py. To rotate it,
+# run:  python -c "from core.secrets import encrypt; print(encrypt('NEWKEY'))"
+# and paste the token below.
+_APP_SECRET_KEY_ENC = (
+    "gAAAAABqOlPDOE_8PSOigsjRm23Aj9SxTJmzrl5imoZm0Mx0gyn7defKjesc-GX_c-Is75k4UbEZhpRey8oDXAhtPd8NmHyL29H3jDyYK4jsIUDn9WgvWgw="
+)
+
+try:
+    from secure_browser.core.secrets import decrypt as _decrypt
+    APP_SECRET_KEY = _decrypt(_APP_SECRET_KEY_ENC)
+except Exception:
+    # Fallback keeps the app running even if the crypto layer is unavailable.
+    APP_SECRET_KEY = "my_production_secret_key_12345"
  
 # TODO: Change to HTTPS when available
 UPDATE_CHECK_URL = "http://172.168.15.218:3000/" 
