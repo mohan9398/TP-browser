@@ -10,6 +10,9 @@ import html
 from http.server import BaseHTTPRequestHandler
 
 from secure_browser.core.config import TARGET_ORIGIN, TARGET_NETLOC
+from secure_browser.core.logger import get_logger
+
+log = get_logger(__name__)
 
 PROXY_HOST = "127.0.0.1"
 _proxy_port = 0
@@ -131,6 +134,49 @@ def rewrite_set_cookie(cookie_value: str) -> tuple[str, bool]:
 class ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass # Suppress default logging
+
+    def _send_error_page(self, code: int, title: str, message: str):
+        """Send a calm, branded HTML error page instead of a raw 502.
+
+        Seeing a bare server error mid-exam looks like a crash; this explains
+        what happened and tells the student what to do.
+        """
+        html_page = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+  html,body{{height:100%;margin:0}}
+  body{{display:flex;align-items:center;justify-content:center;
+    font-family:'Segoe UI',system-ui,sans-serif;background:#f5f0eb;color:#3c3631}}
+  .card{{max-width:520px;text-align:center;padding:48px 40px;background:#fff;
+    border:1px solid #e6dace;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.06)}}
+  .icon{{font-size:56px;margin-bottom:12px}}
+  h1{{font-size:22px;margin:0 0 10px;color:#292524}}
+  p{{font-size:15px;line-height:1.6;color:#6b7280;margin:0 0 24px}}
+  button{{background:#292524;color:#fff;border:none;border-radius:8px;
+    padding:12px 28px;font-size:15px;font-weight:600;cursor:pointer}}
+  button:hover{{background:#44403c}}
+  .hint{{margin-top:18px;font-size:13px;color:#a89f91}}
+</style></head>
+<body><div class="card">
+  <div class="icon">📡</div>
+  <h1>{title}</h1>
+  <p>{message}</p>
+  <button onclick="location.reload()">↻ Try Again</button>
+  <div class="hint">If this keeps happening, use the <b>Network</b> button
+  in the toolbar to check your Wi-Fi connection.</div>
+</div></body></html>"""
+        raw = html_page.encode("utf-8")
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
+        except Exception:
+            pass
 
     def _decompress(self, raw: bytes, encoding: str) -> bytes:
         enc = (encoding or "").lower().strip()
@@ -300,10 +346,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
             pass # Browser aborted
         except Exception as e:
-            try:
-                self.send_error(502, str(e))
-            except Exception:
-                pass
+            log.warning("Proxy could not reach exam server (%s): %s",
+                        target_url, e)
+            self._send_error_page(
+                502,
+                "Can't reach the exam server",
+                "The browser could not connect to the exam server. This is "
+                "usually a Wi-Fi or network problem, not an error with your "
+                "exam. Please check your connection and try again.",
+            )
 
     def do_GET(self): self._forward()
     def do_POST(self):

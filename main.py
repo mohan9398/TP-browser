@@ -154,7 +154,13 @@ def run_child_process():
         # 2. Start Sentinel
         sentinel = ProcessSentinel()
         sentinel.start()
- 
+
+        # 2.1 Start continuous anti-debug watch (one process scan per minute).
+        import threading
+        threading.Thread(
+            target=anti_debug_loop, args=(60.0,), daemon=True, name="AntiDebug"
+        ).start()
+
         # 2.5 Start the Local Proxy Server BEFORE Qt initialization
         allocated_port = start_proxy()
         
