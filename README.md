@@ -127,3 +127,4 @@ Navigation is restricted to:
 - `google.com` — Allowed for OAuth/login flows
 - `192.168.2.5` — Local network resource
 - `localhost` / `127.0.0.1` — Always allowed (local proxy)
+## change above ip's according to your requirement.
