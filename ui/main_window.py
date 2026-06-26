@@ -8,45 +8,38 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
 
-from secure_browser.core.config import START_URL, ALLOWED_DOMAINS, APP_VERSION, APP_SECRET_KEY
+from secure_browser.core.config import ALLOWED_DOMAINS, APP_VERSION, APP_SECRET_KEY, TARGET_NETLOC
 from secure_browser.ui.browser_engine import SecurePage
+from secure_browser.ui.college_selector import CollegeSelectorWidget
 from secure_browser.network.request_signer import HmacRequestInterceptor
 from PyQt6.QtWebEngineCore import QWebEngineProfile
-# from secure_browser.ui.dialogs import WifiDialog # Pending implementation
+
 
 class SecureBrowser(QMainWindow):
     def __init__(self, proxy_origin=None):
         super().__init__()
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
-            Qt.WindowType.Window | 
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.Window |
             Qt.WindowType.CustomizeWindowHint
         )
         self.setWindowTitle("Secure Exam Browser")
         self.home_view = None
         self._allow_close = False
         self.proxy_origin = proxy_origin
-        
-        # Setup HMAC network interceptor logically on the default WebEngine profile
+        self._active_college = None
+
         self.interceptor = HmacRequestInterceptor(APP_SECRET_KEY, parent=self)
         QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(self.interceptor)
-        
+
         self.setup_ui()
         self.setup_clipboard_timer()
-        
-        def _build_url(target):
-            # If proxy is enabled, we route the target through the proxy
-            # login_proxy expects the path part, e.g., Proxy: http://127.0.0.1:4000/toofan
-            if self.proxy_origin:
-                parsed = QUrl(target)
-                return QUrl(self.proxy_origin + parsed.path())
-            return QUrl(target)
 
-        if isinstance(START_URL, list):
-            for i, url in enumerate(START_URL):
-                self.create_new_tab(_build_url(url), f"Exam Portal {i+1}", is_home=(i==0))
-        else:
-            self.create_new_tab(_build_url(START_URL), "Exam Portal", is_home=True)
+        # Show college selector on startup — no URL loaded yet
+        self.college_selector.show_selector()
+        self._set_nav_visible(False)
+
+    # ── UI setup ──────────────────────────────────────────────────────────────
 
     def setup_ui(self):
         central = QWidget()
@@ -64,7 +57,10 @@ class SecureBrowser(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
+
         self._build_offline_overlay(central)
+        self._build_college_selector(central)
+
         self.setStyleSheet("""
             QMainWindow { background: #f9fafb; }
             QTabWidget::pane { border: none; background: #ffffff; border-top: 1px solid #e5e7eb; }
@@ -78,13 +74,14 @@ class SecureBrowser(QMainWindow):
             QPushButton:pressed { background: #e0d8ce; }
         """)
 
+    def _build_college_selector(self, parent):
+        self.college_selector = CollegeSelectorWidget(parent)
+        self.college_selector.portal_selected.connect(self._on_portal_selected)
+        self.college_selector.hide()
+
     def _build_offline_overlay(self, parent):
-        """A friendly 'check your connection' panel shown when a page fails to
-        load (e.g. Wi-Fi dropped). Hidden until needed, sits over the tabs."""
         self.offline_overlay = QFrame(parent)
-        self.offline_overlay.setStyleSheet(
-            "QFrame { background: #f5f0eb; }"
-        )
+        self.offline_overlay.setStyleSheet("QFrame { background: #f5f0eb; }")
         ov = QVBoxLayout(self.offline_overlay)
         ov.setContentsMargins(40, 40, 40, 40)
         ov.addStretch()
@@ -157,43 +154,7 @@ class SecureBrowser(QMainWindow):
 
         self.offline_overlay.hide()
 
-    def _position_overlay(self):
-        if not hasattr(self, "offline_overlay"):
-            return
-        # Cover the tab area (everything below the 60px toolbar).
-        parent = self.offline_overlay.parentWidget()
-        if parent:
-            self.offline_overlay.setGeometry(
-                0, 60, parent.width(), max(0, parent.height() - 60)
-            )
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._position_overlay()
-
-    def _retry_load(self):
-        self.offline_overlay.hide()
-        self.reload_page()
-
-    def _on_load_finished(self, ok):
-        if ok:
-            self.offline_overlay.hide()
-        else:
-            self._position_overlay()
-            self.offline_overlay.raise_()
-            self.offline_overlay.show()
-
-    def setup_clipboard_timer(self):
-        self.clipboard = QApplication.clipboard()
-        try:
-            self.clipboard.clear()
-        except Exception:
-            pass
-            
-        self.clip_timer = QTimer(self)
-        self.clip_timer.setSingleShot(True)
-        self.clip_timer.timeout.connect(self.clipboard.clear)
-        self.clip_timer.start(500)
+    # ── Toolbar ───────────────────────────────────────────────────────────────
 
     def create_toolbar(self):
         toolbar = QFrame()
@@ -216,11 +177,34 @@ class SecureBrowser(QMainWindow):
         layout.addWidget(self.btn_forward)
         layout.addWidget(self.btn_reload)
         layout.addWidget(self.btn_wifi)
+
+        # College name label — shown after a portal is selected
+        self.lbl_college = QLabel("")
+        self.lbl_college.setStyleSheet(
+            "background: #292524; color: #ffffff; border-radius: 8px;"
+            " padding: 5px 16px; font-size: 13px; font-weight: 700;"
+            " font-family: 'Segoe UI', system-ui, sans-serif;"
+            " margin-left: 8px;"
+        )
+        layout.addWidget(self.lbl_college)
+
         layout.addStretch()
 
         lbl_version = QLabel(f"v{APP_VERSION}")
-        lbl_version.setStyleSheet("color: #a89f91; font-size: 12px; margin-right: 24px; font-weight: 600; font-family: 'Segoe UI', system-ui, sans-serif;")
+        lbl_version.setStyleSheet(
+            "color: #a89f91; font-size: 12px; margin-right: 8px; font-weight: 600;"
+            " font-family: 'Segoe UI', system-ui, sans-serif;"
+        )
         layout.addWidget(lbl_version)
+
+        # Change Portal button — shown after a portal is selected
+        self.btn_change_portal = QPushButton("⊞ Change Portal")
+        self.btn_change_portal.setStyleSheet("""
+            QPushButton { background: #f5f0eb; color: #5c544e; border: 1px solid #d6cec5; border-radius: 6px; padding: 8px 16px; font-weight: 600; font-size: 13px; margin-right: 8px; font-family: 'Segoe UI', system-ui, sans-serif; }
+            QPushButton:hover { background: #ebe4db; color: #292524; border-color: #b5ada5; }
+        """)
+        self.btn_change_portal.clicked.connect(self._show_college_selector)
+        layout.addWidget(self.btn_change_portal)
 
         btn_exit = QPushButton("Exit Session")
         btn_exit.setStyleSheet("""
@@ -233,9 +217,101 @@ class SecureBrowser(QMainWindow):
 
         return toolbar
 
+    def _set_nav_visible(self, visible: bool):
+        for w in (self.btn_back, self.btn_forward, self.btn_reload,
+                  self.btn_wifi, self.lbl_college, self.btn_change_portal):
+            w.setVisible(visible)
+
+    # ── College selector integration ──────────────────────────────────────────
+
+    def _show_college_selector(self):
+        self.offline_overlay.hide()
+        self._set_nav_visible(False)
+        self.college_selector.show_selector()
+        self._position_college_selector()
+
+    def _on_portal_selected(self, college: str, app_name: str, url: str):
+        self._active_college = college
+        self.college_selector.hide()
+
+        # Update toolbar
+        self.lbl_college.setText(f"{college}  ·  {app_name}")
+        self._set_nav_visible(True)
+
+        # Clear any existing tabs, then load the selected URL
+        while self.tabs.count():
+            widget = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            if widget:
+                widget.deleteLater()
+        self.home_view = None
+
+        self.create_new_tab(self._build_url(url), f"{college} — {app_name}", is_home=True)
+
+    def _build_url(self, target: str) -> QUrl:
+        parsed = QUrl(target)
+        # Only route through the local proxy for the face-login server —
+        # it rewrites the Origin header so camera permissions work over HTTP.
+        # All other URLs (different IPs, Google, etc.) load directly.
+        if self.proxy_origin and parsed.host() == TARGET_NETLOC:
+            return QUrl(self.proxy_origin + parsed.path())
+        return parsed
+
+    # ── Overlay positioning ───────────────────────────────────────────────────
+
+    def _position_college_selector(self):
+        if not hasattr(self, 'college_selector'):
+            return
+        parent = self.college_selector.parentWidget()
+        if parent:
+            self.college_selector.setGeometry(0, 0, parent.width(), parent.height())
+
+    def _position_overlay(self):
+        if not hasattr(self, 'offline_overlay'):
+            return
+        parent = self.offline_overlay.parentWidget()
+        if parent:
+            self.offline_overlay.setGeometry(
+                0, 60, parent.width(), max(0, parent.height() - 60)
+            )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._position_overlay()
+        self._position_college_selector()
+
+    # ── Load state ────────────────────────────────────────────────────────────
+
+    def _retry_load(self):
+        self.offline_overlay.hide()
+        self.reload_page()
+
+    def _on_load_finished(self, ok):
+        if ok:
+            self.offline_overlay.hide()
+        else:
+            self._position_overlay()
+            self.offline_overlay.raise_()
+            self.offline_overlay.show()
+
+    # ── Clipboard timer ───────────────────────────────────────────────────────
+
+    def setup_clipboard_timer(self):
+        self.clipboard = QApplication.clipboard()
+        try:
+            self.clipboard.clear()
+        except Exception:
+            pass
+
+        self.clip_timer = QTimer(self)
+        self.clip_timer.setSingleShot(True)
+        self.clip_timer.timeout.connect(self.clipboard.clear)
+        self.clip_timer.start(500)
+
+    # ── Tab management ────────────────────────────────────────────────────────
+
     def create_new_tab(self, url=QUrl("about:blank"), label="New Tab", is_home=False):
         view = QWebEngineView()
-        # Parenting page to view ensures they die together
         page = SecurePage(parent=view, browser_window=self)
         view.setPage(page)
 
@@ -271,26 +347,30 @@ class SecureBrowser(QMainWindow):
         widget = self.tabs.currentWidget()
         return widget if isinstance(widget, QWebEngineView) else None
 
-    # Navigation slots
+    # ── Navigation ────────────────────────────────────────────────────────────
+
     def go_back(self):
         v = self.current_view()
-        if v: v.back()
+        if v:
+            v.back()
+
     def go_forward(self):
         v = self.current_view()
-        if v: v.forward()
+        if v:
+            v.forward()
+
     def reload_page(self):
         v = self.current_view()
-        if v: v.reload()
+        if v:
+            v.reload()
 
-    # Stub for WiFi dialog
     def open_wifi(self):
         from secure_browser.ui.dialogs import WifiDialog
         dialog = WifiDialog(self)
-        # Connect specific signal if we add one, or just rely on user clicking reload.
-        # Better: let's make the dialog emit a signal or return a result
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            # If dialog accepted (meaning connected), reload
             self.reload_page()
+
+    # ── Security ──────────────────────────────────────────────────────────────
 
     def confirm_exit(self):
         reply = QMessageBox.question(
@@ -302,43 +382,22 @@ class SecureBrowser(QMainWindow):
             self.close()
 
     def handle_permissions(self, url, feature):
-        # Only allow mic/cam for specific domains
         from PyQt6.QtWebEngineCore import QWebEnginePage as QWEP
         host = url.host().lower()
-        
-        feature_name = "Unknown"
-        if feature == QWEP.Feature.MediaAudioCapture:
-            feature_name = "Microphone"
-        elif feature == QWEP.Feature.MediaVideoCapture:
-            feature_name = "Camera"
-        elif feature == QWEP.Feature.MediaAudioVideoCapture:
-            feature_name = "Camera & Microphone"
-        elif feature == QWEP.Feature.DesktopVideoCapture:
-            feature_name = "Desktop Video"
-        elif feature == QWEP.Feature.DesktopAudioVideoCapture:
-            feature_name = "Desktop Video & Audio"
-            
-
         if any(d in host for d in ALLOWED_DOMAINS):
-             # Simplified permission grant for creating the exam environment
-             # In production, this should be granular
-             self.sender().setFeaturePermission(url, feature, QWEP.PermissionPolicy.PermissionGrantedByUser)
+            self.sender().setFeaturePermission(url, feature, QWEP.PermissionPolicy.PermissionGrantedByUser)
         else:
-             self.sender().setFeaturePermission(url, feature, QWEP.PermissionPolicy.PermissionDeniedByUser)
+            self.sender().setFeaturePermission(url, feature, QWEP.PermissionPolicy.PermissionDeniedByUser)
 
     def inject_security_js(self, page):
-        # JS to block right-clicks and developer key-combos
-        # We ALLOW Ctrl+C/V/X for coding questions
         js = """
         (function() {
             document.addEventListener('contextmenu', e => e.preventDefault());
             document.addEventListener('keydown', function(e) {
                 const k = e.key.toLowerCase();
-                // Block F12, PrintScreen
                 if (k === 'f12' || k === 'printscreen') {
                     e.preventDefault(); return false;
                 }
-                // Block Ctrl+Shift+I/J/C (DevTools)
                 if (e.ctrlKey && e.shiftKey && ['i','j','c'].includes(k)) {
                     e.preventDefault(); return false;
                 }
@@ -351,7 +410,8 @@ class SecureBrowser(QMainWindow):
         if self._allow_close:
             try:
                 self.clip_timer.stop()
-            except: pass
+            except Exception:
+                pass
             event.accept()
         else:
             event.ignore()

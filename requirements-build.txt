@@ -1,0 +1,16 @@
+# Build dependencies for TP-Browser with Nuitka and optional Cython
+
+# Core build tools
+nuitka>=2.0
+Cython>=3.0
+
+# Application dependencies
+PyQt6>=6.0
+PyQt6-WebEngine>=6.0
+psutil>=6.0
+pywifi>=0.0.1
+cryptography>=40.0
+
+# Optional but recommended for better builds
+wheel>=0.40
+setuptools>=65.0

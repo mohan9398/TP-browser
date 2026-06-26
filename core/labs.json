@@ -1,0 +1,58 @@
+{
+  "colleges": ["NGIT", "KMIT", "KMEC", "KMCE"],
+  "portals": {
+    "NGIT": [
+      {
+        "app": "Test Center",
+        "slug": "testcenter",
+        "url": "http://172.168.15.216:8000"
+      },
+      {
+        "app": "google",
+        "slug": "google",
+        "url": "http://www.google.com"
+      },
+      {
+        "app": "Toofan",
+        "slug": "toofan",
+        "url": "http://172.168.15.213/toofan"
+      }
+    ],
+    "KMIT": [
+      {
+        "app": "Test Center",
+        "slug": "testcenter",
+        "url": "http://172.168.15.216:8000"
+      },
+      {
+        "app": "Toofan",
+        "slug": "toofan",
+        "url": "http://172.168.15.213/toofan"
+      }
+    ],
+    "KMEC": [
+      {
+        "app": "Test Center",
+        "slug": "testcenter",
+        "url": "http://172.168.15.216:8000"
+      },
+      {
+        "app": "Toofan",
+        "slug": "toofan",
+        "url": "http://172.168.15.213/toofan"
+      }
+    ],
+    "KMCE": [
+      {
+        "app": "Test Center",
+        "slug": "testcenter",
+        "url": "http://172.168.15.216:8000"
+      },
+      {
+        "app": "Toofan",
+        "slug": "toofan",
+        "url": "http://172.168.15.213/toofan"
+      }
+    ]
+  }
+}
