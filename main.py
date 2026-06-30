@@ -206,6 +206,13 @@ def run_child_process():
         sys.exit(exit_code)
         
     except Exception as e:
+        import traceback
+        try:
+            log_path = os.path.join(os.environ.get("USERPROFILE", "C:\\Users\\Public"), "Desktop", "tp_crash.log")
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(traceback.format_exc())
+        except Exception:
+            pass
         sys.exit(1)
  
 def show_error(msg):
