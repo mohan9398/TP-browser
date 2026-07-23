@@ -2,7 +2,7 @@
 import os
  
 # Application Info
-APP_VERSION = "1.0.0" # Incremented for new version
+APP_VERSION = "1.0.1" # Incremented for new version
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 "
@@ -26,23 +26,21 @@ except Exception:
     APP_SECRET_KEY = "my_production_secret_key_12345"
  
 # TODO: Change to HTTPS when available
-UPDATE_CHECK_URL = "http://172.168.15.218:3000/" 
-# START_URL = [
-#     "http://192.168.2.5:81/"]
-# START_URL = "http://172.168.15.216:8000/"
-START_URL = "http://172.168.15.213/toofan"
+UPDATE_CHECK_URL = "https://kmit.in/download"
+
 TARGET_ORIGIN = "http://172.168.15.213"
 TARGET_NETLOC = "172.168.15.213"
- 
+
 ALLOWED_DOMAINS = [
+    "https://elms.kmce.in/download",
     "192.168.2.5",
     "172.168.15.213", 
     "ksjc.teleuniv.in", 
     "teleuniv.in", 
-    "google.com",
     "172.168.15.218",
     "172.168.15.215",
-    "172.168.15.216"
+    "172.168.15.216",
+    "172.168.13.69"
 ]
  
 # Security Configuration
