@@ -45,6 +45,32 @@ class WiFiManager(QObject):
             return set()
 
     @staticmethod
+    def get_current_ssid() -> str:
+        """Windows-only: return the SSID of the currently connected network.
+
+        Uses `netsh wlan show interfaces` — unlike the saved-password lookup
+        this does not require admin rights. Returns "" if not connected or
+        the query fails for any reason (no Wi-Fi adapter, ethernet-only, etc).
+        """
+        if sys.platform != "win32":
+            return ""
+        try:
+            CREATE_NO_WINDOW = 0x08000000  # don't flash a console window
+            out = subprocess.check_output(
+                ["netsh", "wlan", "show", "interfaces"],
+                stderr=subprocess.DEVNULL, text=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            for line in out.splitlines():
+                line = line.strip()
+                # Match "SSID" but not "BSSID"
+                if line.startswith("SSID") and not line.startswith("BSSID"):
+                    return line.split(":", 1)[1].strip()
+        except Exception:
+            log.exception("Could not read current SSID")
+        return ""
+
+    @staticmethod
     def get_saved_password(ssid: str) -> str:
         """Windows-only: return the stored password for a saved network.
 
