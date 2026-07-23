@@ -1,130 +1,160 @@
 # TeleBrowser — Secure Exam Browser
 
-A Windows-based secure browser for online examination proctoring. Locks down the system environment during exams to prevent cheating via process monitoring, keyboard blocking, desktop isolation, and anti-debug/anti-VM detection.
+TeleBrowser is a Windows-only, locked-down browser for online examinations. It
+uses PyQt6 and Qt WebEngine for the browser UI, Windows APIs for desktop and
+keyboard isolation, and a local reverse proxy for HTTP-based exam portals that
+need camera and microphone access.
 
----
+## Current features
 
-## Features
+- **Two-process secure launch** — a parent launcher performs preflight checks,
+  creates `SecureExamDesktop`, and starts a child process there with
+  `--secure-mode`.
+- **College and portal selection** — the initial screen is populated from
+  `core/labs.json`; the chosen portal is then opened in the browser.
+- **Desktop and keyboard lockdown** — disables Task Manager and blocks Windows
+  keys, Alt+Tab, Alt+Esc, Alt+F4, Alt+Space, and Ctrl+Shift+Esc.
+- **Process sentinel** — scans approximately every 59 seconds and terminates
+  configured browsers, communication tools, remote-access clients, and screen
+  capture applications.
+- **Anti-debug and anti-VM checks** — checks processes, the Windows debugger API,
+  and VM-related registry values at startup and periodically during an exam.
+- **Local HTTP proxy** — binds to a random localhost port, forwards requests to
+  `TARGET_ORIGIN`, rewrites text payloads, redirects, and cookies, and streams
+  binary responses.
+- **HMAC request signing** — adds `X-Exam-Time`, `X-Exam-Nonce`, and
+  `X-Exam-Signature` headers to non-static browser requests.
+- **Camera and microphone support** — configures Chromium and Qt WebEngine to
+  grant media permissions needed by approved exam origins.
+- **Built-in Wi-Fi management** — scans, reconnects to saved networks, and
+  connects to new WPA2/open networks without leaving the secure desktop.
+- **Installer-based updates** — compiled builds check a JSON manifest, download
+  an Inno Setup installer in the background, and install it after the user
+  clicks the update button.
+- **Single-instance enforcement** — a named Windows mutex prevents duplicate
+  launchers.
 
-- **Desktop Isolation** — Creates a dedicated Windows desktop (`SecureExamDesktop`) so only the browser is accessible during the exam
-- **Keyboard Lockdown** — Low-level WH_KEYBOARD_LL hook blocks Alt+Tab, Win key, Alt+F4, Ctrl+Shift+Esc, and similar escape shortcuts
-- **Process Sentinel** — Background thread kills forbidden applications (browsers, screen capture tools, remote desktop clients, messaging apps) every 2 seconds
-- **Anti-Debug / Anti-VM** — Detects debuggers (gdb, x64dbg, radare2, etc.) and virtual machines (VMware, VirtualBox, Hyper-V, KVM) via process inspection, registry keys, and the `IsDebuggerPresent` WinAPI
-- **Local HTTP Proxy** — Runs on a dynamic localhost port; rewrites origin URLs in HTML/JS/JSON payloads, strips CORS headers, and manages cookies to allow the exam server to function under Chromium's security model
-- **HMAC Request Signing** — Injects `X-Exam-Time`, `X-Exam-Nonce`, and `X-Exam-Signature` headers on every request using HMAC-SHA256
-- **Camera / Microphone Proctoring** — Grants media permissions aggressively; injects a JS monitor for `getUserMedia` calls; allows WebRTC LAN ICE candidates
-- **Clipboard Clearing** — Wipes the clipboard every 500 ms to prevent data exfiltration
-- **Auto-Update** — Checks a remote update server on launch and swaps the executable via a batch script if a newer version is available
-- **Single Instance Enforcement** — Uses a named global mutex to prevent running multiple instances
-- **Domain Whitelist** — Navigation is restricted to approved exam server IPs and domains; all other requests are blocked
+## Runtime architecture
 
----
-
-## Architecture
-
-The application follows a **two-stage launcher** model:
-
+```text
+main.py (parent launcher)
+  ├── integrity and anti-debug/VM checks
+  ├── single-instance mutex
+  ├── optional update check and update window
+  ├── Task Manager lockdown
+  └── creates SecureExamDesktop and launches --secure-mode
+        ├── low-level keyboard hook (compiled build)
+        ├── process sentinel and periodic anti-debug loop
+        ├── localhost reverse proxy
+        └── PyQt6 UI
+              ├── college/portal selector
+              ├── restricted browser tabs
+              └── Wi-Fi dialog
 ```
-main.py (Parent Process)
-  ├── Anti-debug probe
-  ├── Single-instance mutex check
-  ├── Integrity checks (DLL presence, not running from Temp)
-  ├── Auto-update check
-  └── Spawns Child Process on SecureExamDesktop
-        ├── Keyboard hook (WH_KEYBOARD_LL)
-        ├── Process sentinel thread
-        └── PyQt6 GUI (SecureBrowser + SecurePage + local proxy)
-```
 
-### Directory Layout
+## Repository layout
 
-```
+```text
 TP-browser/
-├── main.py                   # Entry point; parent/child orchestration
+├── main.py                    # Parent/child orchestration
+├── build.py                   # Nuitka/Cython build driver
+├── installer.iss              # Inno Setup installer definition
+├── requirements-build.txt     # Runtime and build dependencies
 ├── core/
-│   ├── config.py             # App constants, allowed domains, forbidden apps, secrets
-│   └── logger.py             # Thread-safe logging singleton
+│   ├── config.py              # URLs, allowlists, blocklists, Chromium flags
+│   ├── labs.json              # Colleges, portals, and portal URLs
+│   ├── secrets.py             # Embedded-key obfuscation helpers
+│   └── logger.py              # Opt-in rotating debug logger
 ├── network/
-│   ├── login_proxy.py        # Local HTTP proxy with origin rewriting
-│   ├── request_signer.py     # QWebEngineUrlRequestInterceptor — HMAC header injection
-│   ├── updater.py            # Version check and executable swap
-│   └── wifi_manager.py       # WiFi scan/connect via pywifi
+│   ├── login_proxy.py         # Local reverse proxy
+│   ├── request_signer.py      # HMAC request interceptor
+│   ├── updater.py             # Update check, download, and silent install
+│   └── wifi_manager.py        # Asynchronous Wi-Fi operations
 ├── security/
-│   ├── system_locker.py      # Low-level keyboard hook + task manager disable
-│   ├── process_monitor.py    # Sentinel thread that kills forbidden processes
-│   └── anti_debug.py         # Debugger and VM detection
-└── ui/
-    ├── main_window.py        # SecureBrowser QMainWindow (tabs, nav, full-screen)
-    ├── browser_engine.py     # SecurePage QWebEnginePage (permissions, domain filter, JS injection)
-    └── dialogs.py            # WifiDialog
+│   ├── anti_debug.py          # Debugger and VM detection
+│   ├── process_monitor.py     # Forbidden-process sentinel
+│   └── system_locker.py       # Keyboard hook and Task Manager policy
+├── ui/
+│   ├── main_window.py         # Full-screen browser shell
+│   ├── browser_engine.py      # Navigation and media-permission policy
+│   ├── college_selector.py    # College/portal selection UI
+│   ├── dialogs.py             # Wi-Fi dialog
+│   └── update_progress.py     # Update download/install window
+└── mdfiles/                   # Detailed project documentation
 ```
 
----
-
-## Dependencies
-
-| Library | Purpose |
-|---------|---------|
-| PyQt6 | GUI, WebEngine, URL interceptor |
-| psutil | Process enumeration and termination |
-| pywifi | WiFi scanning and connection |
-| ctypes | Windows API calls (hooks, desktops, mutex) |
-
-> No `requirements.txt` is currently present. Install dependencies manually:
-> ```
-> pip install PyQt6 PyQt6-WebEngine psutil pywifi
-> ```
-
-This application is **Windows-only** — it relies on WinAPI, winreg, and Windows-specific Chromium flags.
-
----
+Source imports use the package name `secure_browser`. During builds,
+`build.py` creates a temporary directory junction with that name when the
+checkout directory itself has a different name.
 
 ## Configuration
 
-All tuneable values live in [core/config.py](core/config.py):
+The main settings are in `core/config.py`; portal entries are in
+`core/labs.json`.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `APP_VERSION` | `1.0.0` | Current build version |
-| `EXAM_SERVER_URL` | `http://172.168.15.213/toofan` | Primary exam server |
-| `UPDATE_CHECK_URL` | `http://172.168.15.218:3000/` | Auto-update endpoint |
-| `USER_AGENT` | `TeleBrowser/1.0` | Chromium user-agent string |
-| `SECRET_KEY` | `my_production_secret_key_12345` | HMAC signing secret — **change before production** |
-| `ALLOWED_ORIGINS` | See config | Whitelist of IPs and domains |
-| `FORBIDDEN_APPS` | See config | Process names to kill |
+| Setting | Current value/purpose |
+|---|---|
+| `APP_VERSION` | `1.0.0`; used by the UI, build metadata, and updater |
+| `UPDATE_CHECK_URL` | Development update-manifest endpoint |
+| `TARGET_ORIGIN` / `TARGET_NETLOC` | Face-login server reached through the local proxy |
+| `ALLOWED_DOMAINS` | Exact hosts and subdomains allowed by `SecurePage` |
+| `APP_SECRET_KEY` | Decrypted embedded HMAC key with a plaintext fallback |
+| `FORBIDDEN_APPS` / `SCREENSHOT_TOOLS` | Processes terminated by the sentinel |
+| `QT_FLAGS` | Chromium media, security, and WebRTC flags |
 
----
+Every host used in `core/labs.json` must also be permitted by
+`ALLOWED_DOMAINS`. The current Google portal entry does not satisfy that rule
+because `google.com` is not currently in the allowlist.
 
-## Security Notes
+## Development
 
-- **HMAC secret** (`SECRET_KEY` in config.py) is currently a placeholder. Replace it with a strong random value before deployment.
-- Certificate pinning is not yet implemented — the browser currently accepts all self-signed certificates.
-- The anti-VM MAC address check is disabled by default due to false positives on some hardware.
-- The logger (`core/logger.py`) is a stub and does not persist logs to disk.
+Install the dependencies:
 
----
+```powershell
+pip install -r requirements-build.txt
+```
 
-## Running
+The application is Windows-specific. Source-mode behavior is intentionally
+safer than a compiled build: the low-level keyboard hook is only installed when
+`sys.frozen` is true. Imports also require the project to be available as the
+`secure_browser` package; the production build script creates that package-name
+bridge automatically.
 
-> Intended to be compiled with Nuitka into a standalone Windows executable. Some security features (keyboard hook, desktop isolation) are gated behind `sys.frozen` and will not activate in a plain Python run.
+Enable diagnostic logging when needed:
 
-```bash
+```powershell
+$env:TELE_BROWSER_DEBUG = "1"
 python main.py
 ```
 
-For a compiled build, distribute the output executable alongside any required DLLs (python3*.dll must be present in the same directory).
+Logs are written to `%TEMP%\SecureExamBrowser\secure_browser.log` with five
+rotating files of approximately 1 MB each. Logging is a no-op by default.
 
----
+## Build and install
 
-## Allowed Domains
+Recommended production build:
 
-Navigation is restricted to:
+```powershell
+python build.py --cython --harden
+```
 
-- `172.168.15.213` — Primary exam server
-- `172.168.15.218` — Update/media server
-- `172.168.15.215`, `172.168.15.216` — Supporting servers
-- `ksjc.teleuniv.in`, `teleuniv.in` — Public exam portal
-- `google.com` — Allowed for OAuth/login flows
-- `192.168.2.5` — Local network resource
-- `localhost` / `127.0.0.1` — Always allowed (local proxy)
-## change above ip's according to your requirement.
+The output is `build/main.dist/SecureBrowser.exe` plus its supporting files.
+Compile `installer.iss` with Inno Setup to produce
+`installer/TPBrowser_Setup_1.0.0.exe`. The entire `main.dist` folder is required;
+the executable cannot be distributed by itself.
+
+## Production warnings
+
+- Development IP addresses and portal URLs are still present in
+  `core/config.py` and `core/labs.json`.
+- The exam, portal, and update endpoints currently use plain HTTP.
+- Downloaded update installers are not checksum- or signature-verified by the
+  application.
+- `certificateError()` currently accepts all certificate errors; certificate
+  pinning or a trusted CA policy is not implemented.
+- The embedded HMAC key is obfuscated, not securely provisioned, and a plaintext
+  fallback remains in `core/config.py`.
+- Silent installation still requires whatever Windows elevation policy applies
+  on the exam machine.
+
+See `mdfiles/PRODUCTION_DEPLOYMENT.md` before preparing a student release.

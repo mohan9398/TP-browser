@@ -34,7 +34,8 @@ from secure_browser.core.config import QT_FLAGS, APP_VERSION, ALLOWED_DOMAINS
 from secure_browser.security.system_locker import sys_lock
 from secure_browser.security.process_monitor import ProcessSentinel
 from secure_browser.security.anti_debug import probe_environment, anti_debug_loop
-from secure_browser.network.updater import AutoUpdater
+from secure_browser.network.updater import check_for_update, UPDATE_AVAILABLE
+from secure_browser.ui.update_progress import UpdateProgressWindow
 from secure_browser.network.login_proxy import start_proxy, get_proxy_origin
 from secure_browser.ui.main_window import SecureBrowser
  
@@ -259,8 +260,32 @@ def check_integrity():
             show_error(msg)
             sys.exit(1)
  
+def _check_for_updates_blocking():
+    """
+    Checks the update server (synchronous, ~10s max timeout). If a newer
+    version exists, shows a small window that downloads it automatically
+    and waits for the user to click "install" before running the silent
+    installer -- see ui/update_progress.py. If the user installs, this
+    process exits and never returns from here. If there's no update, the
+    check fails, or the download fails, this returns normally and the
+    launcher proceeds to start the exam as usual.
+    """
+    status, remote_version, url = check_for_update()
+    if status != UPDATE_AVAILABLE:
+        return
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+
+    window = UpdateProgressWindow()
+    window.show()
+    window.start_download(remote_version, url)
+    app.exec()
+
+
 def main():
-    
+
     # 0. Self-Integrity Verification
     check_integrity()
     
@@ -280,7 +305,7 @@ def main():
  
     # 2. Update Check (Parent only)
     if "--secure-mode" not in sys.argv:
-        AutoUpdater.check_and_update()
+        _check_for_updates_blocking()
  
     # 3. Mode Selection
     if "--secure-mode" in sys.argv:

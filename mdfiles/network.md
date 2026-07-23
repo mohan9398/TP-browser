@@ -11,7 +11,7 @@ letting the student connect to Wi-Fi without leaving the locked-down browser.
 |------|----------------|
 | `login_proxy.py` | A local HTTP proxy that sits between the browser and the exam server, rewriting URLs/cookies so an HTTP exam site behaves like a "secure" same-origin site. |
 | `request_signer.py` | Adds tamper-proof HMAC signature headers to outgoing requests so the exam server can verify they came from the real browser. |
-| `updater.py` | Checks a remote server for a newer version and silently downloads + swaps the executable. |
+| `updater.py` | Checks the update manifest, downloads an Inno Setup installer, and launches a silent in-place upgrade. |
 | `wifi_manager.py` | Scans for and connects to Wi-Fi networks from inside the browser. |
 
 ---
@@ -87,21 +87,34 @@ only happens where it matters.
 
 ---
 
-## `updater.py` — auto-update
+## `updater.py` — installer-based auto-update
 
-`AutoUpdater` keeps the compiled app current:
+The current updater replaces the complete installed application through Inno
+Setup; it does not swap one executable. This matters because the standalone
+distribution contains Qt/WebEngine files and may contain Cython-compiled `.pyd`
+modules that must be upgraded together.
 
-- **`check_and_update()`** — only runs for the compiled `.exe` (it no-ops in dev).
-  It fetches a small JSON document from `UPDATE_CHECK_URL` describing the latest
-  `version` and download `url`.
-- **`_version_tuple()`** — converts a `"1.2.3"` string into a comparable tuple so
-  versions are compared numerically, not as text.
-- **`_perform_update()`** — if the remote version is newer, downloads the new
-  executable next to the current one.
-- **`_create_swap_script()`** — because a running `.exe` cannot overwrite itself,
-  it writes a small `update.bat` that waits, deletes the old exe, moves the new
-  one into place, relaunches it, and deletes itself. The app then exits so the
-  swap can happen.
+- **`check_for_update()`** — only contacts the server for a compiled build. It
+  returns a status tuple rather than directly changing the installation. The
+  manifest must contain a newer `version` and an installer `url`.
+- **`_version_tuple()`** — converts a dotted version string into integers for a
+  numeric comparison with `APP_VERSION`.
+- **`download_installer()`** — downloads the installer in 1 MB chunks to a new
+  `tpbrowser_update_*` temporary directory.
+- **`launch_silent_install_and_relaunch()`** — writes `run_update.bat`, waits for
+  the launcher to exit, runs the installer with
+  `/SILENT /SUPPRESSMSGBOXES /NORESTART`, relaunches the browser, and removes the
+  batch file.
+- **`AutoUpdater`** — remains only as a backwards-compatible wrapper around the
+  function-based API.
+
+`main.py` performs the check in the parent launcher. When an update is
+available, `ui/update_progress.py` starts the download on a `QThread`, shows an
+indeterminate progress window, and reveals an install button after the download
+finishes. A failed check or download does not block normal exam startup.
+
+> The application does not verify a checksum or signature for a downloaded
+> installer. The manifest URL and download URL are currently trusted as-is.
 
 ---
 
@@ -128,5 +141,6 @@ All work happens off the UI thread, and results are delivered via signals so the
 - `main.py` starts the **proxy** before Qt loads and passes its origin to the UI.
 - The **UI** loads the start URL *through* the proxy origin.
 - The **request signer** stamps every request the browser sends.
-- The **updater** runs once at launch (parent process only).
+- The **updater** runs once at launch (compiled parent process only); update
+  downloads are presented through `UpdateProgressWindow`.
 - The **Wi-Fi manager** is opened on demand from the toolbar's Network button.

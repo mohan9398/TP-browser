@@ -2,8 +2,8 @@
 
 This is the **starting point** of the Secure Exam Browser. It is responsible for
 deciding *how* the application runs, locking down the machine, spawning the actual
-browser inside an isolated desktop, and guaranteeing the system is restored
-afterwards. Everything else in the project (network, security, ui) is wired
+browser inside an isolated desktop, and restoring the system on the normal
+cleanup paths. Everything else in the project (network, security, ui) is wired
 together from here.
 
 ---
@@ -62,8 +62,9 @@ dedicated user-data directory under the Windows TEMP folder.
 A **fail-safe** that restores the system to a usable state: re-enables Task
 Manager and removes the low-level keyboard hook. It is registered with
 `atexit.register(cleanup)` so it runs on a normal exit *or* a crash (best effort).
-This is what prevents a student's machine from being left "locked" if the app
-dies unexpectedly.
+This reduces the risk of leaving a student's machine locked after an unexpected
+failure. Like any in-process cleanup, it cannot run after every hard termination
+or operating-system failure.
 
 ### `_build_chromium_flags()`
 Builds the full Chromium command-line flag string (allowed origins + user-data
@@ -120,7 +121,10 @@ Anti-tamper checks (only meaningful for the compiled `.exe` on Windows):
 2. `probe_environment()` — one-off anti-debug / anti-VM check; aborts with a
    message if a debugger or VM is detected.
 3. `enforce_single_instance()` — launcher only.
-4. `AutoUpdater.check_and_update()` — launcher only.
+4. `_check_for_updates_blocking()` — launcher only. It calls
+   `check_for_update()` and, when a newer build exists, opens
+   `UpdateProgressWindow` to download an Inno Setup installer. Installation
+   starts only after the user clicks the install button.
 5. **Mode selection**: if `--secure-mode` → `run_child_process()`, otherwise
    → `launch_secure_desktop()`.
 
@@ -141,6 +145,6 @@ Through `ctypes`, `main.py` talks to the raw Windows API:
 
 ## In one sentence
 
-`main.py` is the **launcher and conductor**: it verifies the environment is safe,
-locks down the PC, spins the real exam browser up inside an isolated desktop as a
-child process, and reliably unlocks everything when the exam ends.
+`main.py` is the **launcher and conductor**: it verifies the environment, locks
+down the PC, starts the exam browser inside an isolated desktop, and restores the
+desktop and lockdown settings on its normal cleanup paths.

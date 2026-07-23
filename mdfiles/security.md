@@ -10,7 +10,7 @@ block the keyboard/OS shortcuts a student could use to escape or cheat.
 | File | Responsibility |
 |------|----------------|
 | `anti_debug.py` | Detects debuggers, reverse-engineering tools, and virtual machines. |
-| `process_monitor.py` | Continuously scans for and kills forbidden / screen-capture apps. |
+| `process_monitor.py` | Periodically scans for and kills forbidden / screen-capture apps. |
 | `system_locker.py` | Disables Task Manager and blocks escape-hatch keyboard shortcuts. |
 
 ---
@@ -69,9 +69,9 @@ running on the machine during the exam.
 **What it does, in a loop:**
 
 1. **Parent health check** — verifies the launcher (parent) process is still
-   alive via `psutil.pid_exists`. If the student closes the app and the launcher
-   dies, the child immediately follows with `os._exit(1)`. This prevents an
-   orphaned exam window.
+   alive via `psutil.pid_exists`. If the launcher dies, the child follows with
+   `os._exit(1)` on the next scan, which can be up to roughly 59 seconds later.
+   This prevents a long-lived orphaned exam window.
 2. **Scan & kill** — walks the process list and, if it finds a process whose name
    is in the blocklist, kills it. The blocklist combines `FORBIDDEN_APPS`
    (other browsers, Discord/Slack/Telegram/Zoom, AnyDesk/TeamViewer, regedit, …)
@@ -124,8 +124,10 @@ correctly interpret the raw keyboard event data the OS hands to the hook.
   `sys_lock.install_keyboard_hook()`.
 - The child starts a `ProcessSentinel` and the `anti_debug_loop` thread for
   continuous protection.
-- On any exit path, `cleanup()` re-enables Task Manager and removes the hook so
-  the student's machine is never left in a locked state.
+- On the normal parent cleanup path, `cleanup()` re-enables Task Manager and
+  removes the hook. The `finally` and `atexit` handlers provide best-effort
+  restoration, but cannot run after every possible hard process termination or
+  system failure.
 
 > **Note:** This layer is **Windows-specific** — it relies on `winreg`, `ctypes`
 > Windows DLLs, and Windows process semantics. Most of it no-ops or is skipped on

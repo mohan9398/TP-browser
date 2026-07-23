@@ -1,261 +1,154 @@
-# TP-Browser Build Guide: Nuitka + Cython Protection
+# TP-Browser Build Guide
 
-This guide explains how to build your application with **Nuitka** (Python → C++ → binary) and optionally **Cython** (Python → C → binary) for maximum code protection against reverse engineering.
-
-## Overview
-
-### What Each Tool Does
-
-| Tool    | Process | Output | Protection Level |
-|---------|---------|--------|------------------|
-| **Nuitka** | Python → C++ → Machine Code | `.exe` + dependencies | High (whole app compiled) |
-| **Cython** | Python → C → Compiled Extensions | `.pyd` files | High (module-level) |
-| **Both** | Nuitka + Cython modules | `.exe` + `.pyd` + dependencies | **Maximum** (layered protection) |
-
-### When to Use Each
-
-- **Nuitka only** (`python build.py`): Fast builds, sufficient protection for most cases
-- **Nuitka + LTO** (`python build.py --lto`): Slower build, smaller exe, better optimization
-- **Nuitka + Cython** (`python build.py --cython`): Extra obfuscation for security-sensitive modules
-- **Maximum hardening** (`python build.py --cython --harden`): All protections enabled (slowest build)
+`build.py` produces a Windows standalone distribution with Nuitka and can
+optionally precompile selected modules with Cython. The build is intentionally
+**standalone**, not one-file: `main.py` rejects execution from a temporary
+directory and requires the Python runtime DLLs beside the executable.
 
 ## Prerequisites
 
-### 1. Install Build Dependencies
+Install the checked-in dependency set:
 
 ```powershell
 pip install -r requirements-build.txt
 ```
 
-Or manually:
+This installs Nuitka, Cython, PyQt6, PyQt6-WebEngine, psutil, pywifi,
+cryptography, wheel, and setuptools. Nuitka also needs a supported C/C++
+compiler. Its automatic MinGW download can be accepted when prompted, or a
+compatible Visual Studio Build Tools installation can be used.
+
+## Build commands
+
+| Command | Current behavior |
+|---|---|
+| `python build.py` | Standard Nuitka standalone build |
+| `python build.py --debug` | Keeps a console window for diagnostics |
+| `python build.py --lto` | Enables Nuitka link-time optimization |
+| `python build.py --harden` | Enables LTO, removes docstrings/asserts, disables `site`, uses static hashes, and enables anti-bloat |
+| `python build.py --cython` | Precompiles the configured sensitive modules as `.pyd` files before Nuitka packaging |
+| `python build.py --cython --harden` | Recommended production configuration in the current project |
+
+Build time and output size depend on Python, the compiler, Qt version, cache
+state, CPU, and selected flags; fixed time or size estimates are not guarantees.
+
+## Cython stage
+
+When `--cython` is present, `compile_cython_modules()` compiles these files in
+place:
+
+- `core/config.py`
+- `core/secrets.py`
+- `security/anti_debug.py`
+- `security/process_monitor.py`
+- `security/system_locker.py`
+- `network/request_signer.py`
+- `network/login_proxy.py`
+
+Each module is converted to C and then to a Windows `.pyd` extension. Nuitka
+packages those binary modules and compiles the remaining Python modules. The
+temporary `.c`, `.pyd`, and compiler-output files created by the build are
+removed in `finally` cleanup after Nuitka exits. If an individual Cython module
+fails, the build continues and Nuitka compiles that module from Python source.
+
+Edit `CYTHON_MODULES` in `build.py` to change this set. Cython and Nuitka make
+casual source inspection harder, but they do not make client-side secrets or
+logic impossible to recover.
+
+## Package-name bridge
+
+Source imports use `secure_browser.*`, while this checkout is normally named
+`TP-browser`. `ensure_package_name()` handles that mismatch during a build:
+
+1. It creates a temporary NTFS directory junction named `secure_browser` beside
+   the checkout when necessary.
+2. Nuitka runs from the parent directory against `secure_browser/main.py`.
+3. The junction is removed after the build, including failed-build cleanup.
+
+Do not distribute or manually retain this temporary junction.
+
+## Nuitka output
+
+Every mode creates:
+
+```text
+build/main.dist/
+├── SecureBrowser.exe
+├── python3*.dll
+├── Qt/WebEngine libraries and resources
+└── Python extension modules and other runtime dependencies
+```
+
+The build embeds the version read from `core/config.py`, applies `Browser.ico`
+when present, disables the console except in `--debug` mode, and removes the
+previous Nuitka output through `--remove-output`.
+
+Keep the entire `build/main.dist/` directory together. Do not copy or distribute
+only `SecureBrowser.exe`; the runtime integrity check and Qt WebEngine require
+the supporting files.
+
+## Installer packaging
+
+The student-facing deliverable is built with `installer.iss` after Nuitka
+succeeds:
+
+1. Run the desired `build.py` command.
+2. Open `installer.iss` in Inno Setup Compiler and build it.
+3. The current script writes
+   `installer/TPBrowser_Setup_1.0.0.exe`.
+
+The installer:
+
+- requires 64-bit-compatible Windows and administrator privileges;
+- installs the complete `main.dist` tree under Program Files;
+- keeps only the `en-US` Qt WebEngine locale;
+- copies `core/labs.json` beside `SecureBrowser.exe`;
+- creates Start Menu and common-desktop shortcuts; and
+- uses a fixed `AppId` so later installers perform in-place upgrades.
+
+Keep `AppVersion`, `VersionInfoVersion`, and `core/config.py:APP_VERSION` in sync
+for every release. Never change the `AppId` after the first production release.
+
+## Troubleshooting
+
+### Cython is unavailable
 
 ```powershell
-pip install nuitka Cython PyQt6 PyQt6-WebEngine psutil pywifi cryptography
+pip install -r requirements-build.txt
 ```
 
-### 2. C/C++ Compiler
+The standard Nuitka build does not require the optional `--cython` stage, but
+the current dependency file installs Cython for both paths.
 
-Nuitka requires a C++ compiler. On Windows:
+### Compiler not found
 
-- **Option A (Automatic)**: Run `python build.py` and accept the MinGW download prompt
-- **Option B (Manual)**: Install Visual Studio Build Tools or MinGW-w64
+Allow Nuitka to download MinGW when prompted or install a supported Visual
+Studio C/C++ toolchain. Installing a Python package named `mingw-w64` is not the
+documented compiler setup for this project.
 
-## Build Modes
+### Package import cannot be resolved
 
-### Mode 1: Basic Nuitka Build (Recommended for most users)
+Check whether a conflicting `secure_browser` file or directory already exists
+beside the repository. The build script reuses an existing path and cannot know
+whether it points to this checkout.
 
-```powershell
-python build.py
-```
+### A Cython module fails
 
-**Output**: `build/main.dist/SecureBrowser.exe` + supporting files
+Read the per-module compiler output. Verify that its path remains in
+`CYTHON_MODULES` and that the module is valid when compiled as a top-level
+extension. The script falls back to Nuitka for failed modules.
 
-**Build time**: ~5-15 minutes
+### The built executable fails integrity checks
 
-**Features**:
-- Full Python → C++ compilation
-- Removes docstrings and optimizes code
-- Hardened against basic reverse engineering
+Run it from the complete `main.dist` directory or install it through Inno Setup.
+Do not run a copied executable by itself or from `%TEMP%`.
 
-### Mode 2: Nuitka + Cython (Extra Protection)
+## Release checklist
 
-```powershell
-python build.py --cython
-```
-
-**What it does**:
-1. Compiles security-sensitive modules with Cython:
-   - `core/config.py` → `config.pyd`
-   - `core/secrets.py` → `secrets.pyd`
-   - `security/anti_debug.py` → `anti_debug.pyd`
-   - `security/process_monitor.py` → `process_monitor.pyd`
-   - `security/system_locker.py` → `system_locker.pyd`
-   - `network/request_signer.py` → `request_signer.pyd`
-   - `network/login_proxy.py` → `login_proxy.pyd`
-
-2. Nuitka then compiles the remaining code + includes the `.pyd` files
-
-**Output**: `build/main.dist/SecureBrowser.exe` + Cython `.pyd` modules + dependencies
-
-**Build time**: ~15-30 minutes (Cython adds 5-15 minutes)
-
-**Protection**: Maximum obfuscation (modules compiled twice in different ways)
-
-### Mode 3: Link-Time Optimization
-
-```powershell
-python build.py --lto
-```
-
-**Build time**: ~15-30 minutes (LTO adds significant time)
-
-**Features**:
-- Whole-program optimization
-- Smaller executable
-- Harder to analyze
-
-### Mode 4: Hardened Build (Anti-Reverse-Engineering)
-
-```powershell
-python build.py --harden
-```
-
-**Build time**: ~20-40 minutes
-
-**Features** (implies `--lto`):
-- Removes all docstrings from the binary
-- Removes assert statements
-- Enables anti-bloat (removes unused stdlib code)
-- No console window (production-ready)
-- Static hash randomization
-
-### Mode 5: Maximum Protection
-
-```powershell
-python build.py --cython --harden
-```
-
-**The nuclear option**: All protections enabled
-
-**Build time**: ~40-60 minutes
-
-**Protection**: Maximum (4 layers):
-1. Cython compilation (Python → C)
-2. Nuitka compilation (Python → C++)
-3. LTO optimization
-4. Anti-bloat + docstring/assert removal
-
-## Advanced: Customizing Cython Modules
-
-Edit `build.py` and modify the `CYTHON_MODULES` list:
-
-```python
-CYTHON_MODULES = [
-    "core/config.py",
-    "core/secrets.py",
-    "security/anti_debug.py",
-    "security/process_monitor.py",
-    "security/system_locker.py",
-    "network/request_signer.py",
-    "network/login_proxy.py",
-    # Add more modules here for extra protection
-]
-```
-
-**Note**: Compile speed increases with more modules. Start with security-sensitive ones.
-
-## Debugging Build Issues
-
-### Issue: "Cython is not installed"
-
-```powershell
-pip install Cython
-```
-
-### Issue: "C compiler not found"
-
-Nuitka will offer to download MinGW. Accept the prompt, or:
-
-```powershell
-pip install mingw-w64
-```
-
-### Issue: Build fails with "cannot find module"
-
-Ensure all dependencies are installed:
-
-```powershell
-pip install PyQt6 PyQt6-WebEngine psutil pywifi cryptography
-```
-
-### Issue: Cython modules fail to compile
-
-Check that the module paths in `CYTHON_MODULES` are correct relative to `PROJECT_DIR`.
-
-## Distribution
-
-After a successful build:
-
-1. **Entire folder**: Ship the complete `build/main.dist/` folder
-   - `.exe` file
-   - All `.dll` files (Python runtime, Qt, WebEngine)
-   - All `.pyd` files (including Cython-compiled modules)
-   - All resource files (translations, plugins)
-
-2. **Do NOT ship**:
-   - The `build/` or `build/.build` directories
-   - Source `.py` files
-   - The junction directory (if created)
-
-3. **Important**: The integrity check in `main.py` requires:
-   - Python runtime DLLs next to the exe
-   - No execution from Temp directory
-   - Code signing recommended (SmartScreen/Gatekeeper)
-
-## Performance Impact
-
-| Build Mode | Build Time | Exe Size | Runtime Speed | Reverse Eng. Difficulty |
-|-----------|-----------|----------|---------------|----------------------|
-| Nuitka only | ~5-10m | ~200MB | Fast | Medium |
-| Nuitka + LTO | ~15-30m | ~150MB | Fast | High |
-| Nuitka + Cython | ~15-30m | ~220MB | Fast | Very High |
-| Max (Cython + Harden) | ~40-60m | ~120MB | Fast | Extremely High |
-
-## What Gets Compiled vs. What Doesn't
-
-### Always Compiled (with Nuitka)
-- `main.py` and all imports
-- Standard library used by your app
-- Third-party libraries (PyQt6, cryptography, etc.)
-
-### Additionally Compiled (with `--cython`)
-- Modules listed in `CYTHON_MODULES`
-- Becomes `.pyd` (binary extensions)
-- Cannot be directly imported as `.py` anymore
-
-### Not Compiled
-- The app still needs Python runtime DLLs
-- Config files, resources, translations
-- Non-code data files
-
-## Tips for Maximum Protection
-
-1. **Always use `--harden`** for production builds
-   - Removes readable strings (docstrings, assert messages)
-   - Reduces binary size by 30-50%
-
-2. **Use `--cython`** for security-critical code
-   - Adds a second layer of obfuscation
-   - Modules in `CYTHON_MODULES` are hardest to reverse-engineer
-
-3. **Code sign the executable**
-   - Prevents SmartScreen warnings
-   - Shows legitimate Windows application
-
-4. **Keep source code private**
-   - Only distribute the compiled `.exe`
-   - Never distribute `.py` files with the binary
-
-5. **Monitor for unpacking attempts**
-   - Your `anti_debug.py` helps detect debuggers
-   - Consider adding telemetry for detection
-
-## Troubleshooting Performance
-
-If the build is too slow:
-
-1. Remove unnecessary modules from `CYTHON_MODULES`
-   - Start with only `core/secrets.py`, `security/anti_debug.py`
-   
-2. Use only `--lto` instead of `--harden` for faster builds
-   
-3. Skip Cython entirely if build time is critical:
-   ```powershell
-   python build.py --harden  # No Cython, still very protected
-   ```
-
-## Further Reading
-
-- [Nuitka Documentation](https://nuitka.net/)
-- [Cython Documentation](https://cython.readthedocs.io/)
-- [PyQt6 Documentation](https://www.riverbankcomputing.com/static/Docs/PyQt6/)
+- Use `python build.py --cython --harden` for the current production profile.
+- Test the application from the complete standalone directory.
+- Build and test the Inno Setup installer, including upgrade and uninstall.
+- Confirm `labs.json` contains production portal URLs.
+- Confirm build and installer versions match.
+- Code-sign the executable and installer for production distribution.
+- Follow `PRODUCTION_DEPLOYMENT.md` before release.

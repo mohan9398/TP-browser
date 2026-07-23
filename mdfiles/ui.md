@@ -1,131 +1,148 @@
 # `ui/` — User Interface Layer
 
-This folder builds everything the student actually **sees and interacts with**: the
-full-screen exam window, the browser engine that renders the exam portal (with all
-its security restrictions), and the Wi-Fi dialog. It is built on **PyQt6** and
-**Qt WebEngine** (Chromium).
+The UI package contains the full-screen browser shell, the restricted
+Qt WebEngine page, the data-driven college/portal selector, the Wi-Fi dialog,
+and the launcher-side update window.
 
 ## Files at a glance
 
 | File | Responsibility |
-|------|----------------|
-| `main_window.py` | The main full-screen browser window: toolbar, tabs, navigation, and security wiring. |
-| `browser_engine.py` | The custom web page/engine that enforces domain rules, grants camera/mic, and restricts the page. |
-| `dialogs.py` | The Wi-Fi management dialog shown from the toolbar. |
+|---|---|
+| `main_window.py` | Full-screen browser, toolbar, tabs, selector integration, offline overlay, and in-page restrictions |
+| `browser_engine.py` | Navigation allowlist, WebEngine settings, media permissions, popups, and certificate handling |
+| `college_selector.py` | Two-step college and portal selector populated by `core/labs.json` |
+| `dialogs.py` | Modal Wi-Fi scan, connection, and saved-password UI |
+| `update_progress.py` | Parent-launcher window for downloading and installing an available update |
 
----
+## `main_window.py` — `SecureBrowser`
 
-## `main_window.py` — `SecureBrowser` (the main window)
+`SecureBrowser` is a frameless `QMainWindow` shown full-screen by the secure
+child process. At construction it installs `HmacRequestInterceptor` on the
+default WebEngine profile, creates the UI, clears the clipboard, reads the
+current Wi-Fi SSID, and displays the college selector. It does not load a fixed
+start URL.
 
-This is the top-level window the student uses during the exam.
+### College and portal flow
 
-**Window setup:**
-- **Frameless, borderless window** (`FramelessWindowHint`) shown full-screen — no
-  title bar, no minimise/close buttons, no way to resize or move it away.
-- Installs the **HMAC request interceptor** (from the network layer) on the
-  default WebEngine profile, so every request the browser makes is signed.
-- Loads the exam start URL(s). If a **proxy origin** was passed in (it always is,
-  in normal operation), it rewrites the start URL to route through the local
-  proxy — keeping the browser on the trusted local origin.
+- `CollegeSelectorWidget.portal_selected` is connected to
+  `_on_portal_selected()`.
+- Choosing a portal hides the selector, shows the navigation controls, clears
+  old tabs safely, and creates a new non-closable home tab.
+- `_build_url()` sends only URLs whose host exactly matches `TARGET_NETLOC`
+  through the local proxy. Other permitted portal URLs load directly.
+- **Change Portal** returns to the selector.
 
-**The toolbar (`create_toolbar`):**
-A styled top bar with:
-- **Back / Forward / Reload** navigation buttons.
-- **Network** button → opens the Wi-Fi dialog.
-- A **version label**.
-- **Exit Session** button → asks for confirmation before allowing exit.
+### Toolbar and tabs
 
-**Tabs (`create_new_tab`, `close_tab`, `update_tab_title`):**
-- Supports multiple tabs, each a `QWebEngineView` backed by a `SecurePage`.
-- The **home/exam tab cannot be closed** — attempting to close the last tab or
-  the home tab shows an info box and is refused.
-- Tab titles are taken from the page title and truncated to fit.
+The toolbar contains Back, Forward, Reload, Network/current SSID, active portal,
+Change Portal, and Exit Session controls. Navigation controls remain hidden on
+the selector screen. Toolbar buttons use `NoFocus` so Space or Enter inside an
+exam does not accidentally activate them.
 
-**Security behaviours wired here:**
-- **`setup_clipboard_timer()`** — clears the system clipboard shortly after start,
-  reducing the chance of pasting pre-prepared answers. (Ctrl+C/V/X themselves are
-  intentionally *left enabled* for coding questions — see the injected JS.)
-- **`handle_permissions()`** — grants camera/microphone/desktop-capture
-  permissions, but **only for allowed domains**; everything else is denied.
-- **`inject_security_js()`** — after every page load, injects JavaScript that:
-  - Blocks the **right-click** context menu.
-  - Blocks **F12** and **PrintScreen**.
-  - Blocks **Ctrl+Shift+I / J / C** (DevTools shortcuts).
-  - Deliberately **allows copy/paste/cut** so coding answers can be entered.
-- **`confirm_exit()` + `closeEvent()`** — the window refuses to close unless the
-  user explicitly confirms exit (`_allow_close` flag). This stops accidental or
-  programmatic closure during an exam.
+Every tab uses a `QWebEngineView` backed by `SecurePage`. The home exam tab and
+the last remaining tab cannot be closed. Page popups are routed into additional
+tabs, and tab titles are shortened to 30 characters.
 
-**`open_wifi()`** — opens the `WifiDialog`; if the student successfully connects,
-the current page is reloaded.
+### Load failures and offline recovery
 
----
+`_on_load_finished()` shows a custom offline overlay when the current page fails
+to load. It ignores queued signals from pages that were just removed, avoiding a
+stale failure appearing over a working replacement tab. The overlay provides
+Try Again and Network actions.
 
-## `browser_engine.py` — `SecurePage` (the locked-down web page)
+### UI-level restrictions
 
-`SecurePage` subclasses `QWebEnginePage` and is where the real browser-level
-restrictions and capabilities live. Every tab uses one.
+- The clipboard is cleared immediately and once more after a 500 ms single-shot
+  timer. It is not cleared continuously.
+- `handle_permissions()` grants requested features when the request host matches
+  the configured allowlist and denies other hosts.
+- After each load, `inject_security_js()` blocks the context menu, F12,
+  PrintScreen, and Ctrl+Shift+I/J/C. Copy, cut, and paste remain available.
+- `closeEvent()` refuses closure until the student confirms **Exit Session**.
 
-**Domain filtering (`acceptNavigationRequest`):**
-- Internal schemes (`about:`, `data:`, `chrome:`) are allowed.
-- Proxied localhost (`127.0.0.1`, `localhost`) is always allowed.
-- External navigation is **only** permitted to domains in `ALLOWED_DOMAINS`
-  (exact match or subdomain). Everything else is blocked — the student cannot
-  surf away to other sites.
+### Wi-Fi integration
 
-**Camera / microphone access (proctoring):**
-The exam needs the webcam over plain HTTP, which Chromium normally forbids. This
-class grants it through multiple layers for reliability:
-- **`_try_grant_profile_permissions()`** — on Qt 6.8+, pre-grants camera/mic at
-  the profile level for every allowed domain, so no prompt is ever shown.
-- **`_aggressively_grant()`** — a per-page fallback (for older Qt) that grants any
-  media permission the instant it is requested.
-- **`_inject_webrtc_monitor()`** — injects JS at document creation that wraps
-  `getUserMedia` to **log** every camera/mic request and whether it was granted —
-  useful for diagnosing why a camera might not appear.
+The Network button opens `WifiDialog`. After the dialog closes, the toolbar SSID
+is refreshed. A successful connection also reloads the current page.
 
-**Engine settings (`_configure_settings`):**
-Enables local storage, JavaScript, plugins; allows insecure content and remote/
-file access; allows LAN ICE candidates for WebRTC proctoring; sets the custom
-user agent; and uses an in-memory HTTP cache (so stale "permission denied"
-entries don't persist).
+## `browser_engine.py` — `SecurePage`
 
-**Other behaviours:**
-- **`createWindow()`** — routes any popup/`target=_blank` request into a new tab
-  in the main window instead of a separate OS window.
-- **`certificateError()`** — currently accepts SSL errors (the exam environment
-  uses self-signed certs). *Marked as a TODO to tighten with cert pinning later.*
-- **`javaScriptConsoleMessage()`** — a deliberate no-op that suppresses Chromium's
-  default console spam to stderr.
+`SecurePage` is the Chromium-level policy layer used by every browser tab.
 
----
+### Navigation filtering
+
+`acceptNavigationRequest()` allows:
+
+- internal `about:`, `data:`, and `chrome:` schemes;
+- `127.0.0.1` and `localhost` for the local proxy; and
+- exact `ALLOWED_DOMAINS` hosts or their subdomains.
+
+All other navigation is rejected. Because this check uses `ALLOWED_DOMAINS`,
+every host listed in `core/labs.json` must also be added to that allowlist.
+
+### Media and WebEngine configuration
+
+- `_try_grant_profile_permissions()` uses the Qt 6.8+ profile permission API to
+  pre-grant audio/video capture for each allowed HTTP and HTTPS origin.
+- `_aggressively_grant()` is a page-level fallback that immediately grants the
+  recognized audio, video, and desktop-capture features.
+- `_inject_webrtc_monitor()` inserts a document-creation script that wraps
+  `getUserMedia` and reports requests and results to the JavaScript console.
+  `javaScriptConsoleMessage()` currently suppresses those console messages at
+  the Python stderr boundary.
+- Local storage, JavaScript, plugins, insecure content, local/remote URL access,
+  autoplay, and LAN WebRTC candidates are enabled. The PDF viewer is disabled.
+- The profile uses the configured user agent and an in-memory HTTP cache.
+
+`createWindow()` sends popup requests back to `SecureBrowser.create_new_tab()`.
+`certificateError()` currently accepts every certificate error to accommodate
+self-signed exam infrastructure; this needs a trusted CA or pinning policy for
+production.
+
+## `college_selector.py` — `CollegeSelectorWidget`
+
+`_load_labs()` searches for `labs.json` next to the running executable first,
+then under the source `core/` directory. This allows an installed portal list to
+be changed without rebuilding the executable.
+
+The selector has two screens:
+
+1. A grid of colleges from the `colleges` array.
+2. Portal cards from `portals[college]`, each emitting
+   `portal_selected(college, app_name, url)` when launched.
+
+The installer copies `core/labs.json` to the installation directory beside
+`SecureBrowser.exe`.
 
 ## `dialogs.py` — `WifiDialog`
 
-A modal dialog that lets the student manage Wi-Fi **without leaving the locked
-browser**. It is the UI front-end for the network layer's `WiFiManager`.
+The modal Wi-Fi dialog drives `network.wifi_manager.WiFiManager` through Qt
+signals:
 
-- **Lists available networks** with a Refresh button; scanning runs asynchronously
-  and shows an indeterminate progress bar while it works.
-- **Connect** — prompts for a password (masked input) and connects on a background
-  thread, again with a progress bar.
-- Responds to the `scan_complete` and `connect_complete` Qt **signals** from
-  `WiFiManager`, so the UI never freezes during scanning/connecting.
-- On a successful connection it `accept()`s the dialog, which signals the main
-  window to reload the exam page.
+- it starts an asynchronous scan and displays sorted SSIDs;
+- saved profiles are marked and reconnect without requesting a password;
+- new networks prompt for a masked password;
+- **Show Password** queries a saved Windows profile and normally requires
+  elevation to reveal the key;
+- closing the dialog cancels an in-progress scan; and
+- successful connection accepts the dialog so the browser can reload.
 
----
+## `update_progress.py` — `UpdateProgressWindow`
 
-## How the UI layer ties together
+This small window runs only in the parent launcher, before the secure desktop is
+created. `_DownloadWorker` downloads the Inno Setup installer on a `QThread`.
+The progress bar is indeterminate because `download_installer()` does not expose
+byte progress. When the download succeeds, an install button appears; clicking
+it starts the detached silent-install/relaunch flow. A failed download closes
+the window and normal launch continues.
 
-- `main.py` (child process) builds the `QApplication` and a `SecureBrowser`,
-  passing in the proxy origin, then shows it full-screen.
-- `SecureBrowser` creates tabs, each backed by a `SecurePage` that enforces the
-  domain/permission/restriction rules.
-- The HMAC interceptor (network layer) signs requests; the proxy (network layer)
-  is the origin pages load from.
-- The Network toolbar button opens `WifiDialog`, which drives `WiFiManager`.
+## How the UI layer connects
 
-> **Note:** The window chrome is styled with Qt stylesheets for a clean, modern
-> look, but the important parts are the **restrictions** layered on top of the
-> standard browser behaviour.
+- `main.py` creates `UpdateProgressWindow` only when a compiled build reports an
+  available update.
+- The secure child starts the proxy, constructs `SecureBrowser(proxy_origin)`,
+  and shows it full-screen.
+- `SecureBrowser` begins with `CollegeSelectorWidget`, then creates `SecurePage`
+  tabs for the selected portal.
+- The network layer signs requests, proxies the configured face-login host, and
+  supplies the Wi-Fi and update operations used by the UI.

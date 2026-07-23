@@ -66,7 +66,7 @@ TP-browser/
 
 - `network/updater.py`
   - Checks a remote endpoint for newer versions
-  - Downloads and swaps the executable if an update is found
+  - Downloads an Inno Setup installer and launches an in-place silent upgrade
 
 - `network/wifi_manager.py`
   - Scans Wi-Fi networks and connects to selected SSIDs
@@ -74,8 +74,16 @@ TP-browser/
 
 - `ui/main_window.py`
   - Builds the browser window and toolbar
-  - Provides the Network button and offline overlay
+  - Hosts the college/portal selector, Network button, and offline overlay
   - Creates tabs with `QWebEngineView`
+
+- `ui/college_selector.py`
+  - Loads colleges and portals from `core/labs.json`
+  - Emits the selected college, application name, and URL to the browser window
+
+- `ui/update_progress.py`
+  - Downloads an available installer on a `QThread`
+  - Requires an explicit click before starting the silent installation
 
 - `ui/dialogs.py`
   - Implements the `WifiDialog` used by the browser UI
@@ -217,8 +225,12 @@ The main Wi-Fi implementation is in:
 ### 4.3 Auto-update
 
 - `network/updater.py` checks `UPDATE_CHECK_URL` for the latest version.
-- If an update exists, it downloads the new executable and creates a swap script.
-- The launcher process can update itself before entering the secure exam desktop.
+- If an update exists, `ui/update_progress.py` downloads the complete Inno Setup
+  installer and exposes an install button.
+- A detached batch file runs the installer silently and relaunches the browser.
+- The check only runs from the compiled parent process, before entering the
+  secure exam desktop.
+- The current flow does not verify a checksum or application-level signature.
 
 ### 4.4 Security lockdown
 
@@ -234,7 +246,8 @@ The main Wi-Fi implementation is in:
 
 - `APP_VERSION`: version string shown in the UI and used for update checks.
 - `UPDATE_CHECK_URL`: endpoint used by the auto-updater.
-- `START_URL`: the initial exam URL loaded into the browser.
+- `TARGET_ORIGIN` / `TARGET_NETLOC`: the face-login origin reached through the
+  local reverse proxy.
 - `ALLOWED_DOMAINS`: trusted domains the browser treats as exam-related.
 - `QT_FLAGS`: Chromium command-line flags needed for the browser to function in this secure environment.
 - `FORBIDDEN_APPS` / `SCREENSHOT_TOOLS`: the list of apps the process sentinel should kill.
@@ -243,6 +256,11 @@ The main Wi-Fi implementation is in:
 
 - Holds the encrypted HMAC secret key used by `request_signer.py`.
 - If this file is missing or decrypted data fails, the app falls back to a default placeholder key.
+
+### `core/labs.json`
+
+- Defines the colleges and portal cards shown at startup.
+- Every configured portal host must also be permitted by `ALLOWED_DOMAINS`.
 
 ---
 
@@ -254,15 +272,20 @@ The main Wi-Fi implementation is in:
 pip install PyQt6 PyQt6-WebEngine psutil pywifi cryptography
 ```
 
-2. Run the app in development mode:
+2. Ensure the checkout is importable as the `secure_browser` package. The
+   production build script creates a temporary package-name junction
+   automatically; a source checkout named `TP-browser` may need the same package
+   path arrangement.
+
+3. Run the app in development mode:
 
 ```bash
 python main.py
 ```
 
-3. Use the Network button to test Wi-Fi scanning and connection.
-4. Inspect `main.py` first to understand launcher vs secure mode.
-5. Follow the Qt signal flow between `ui/dialogs.py` and `network/wifi_manager.py` for Wi-Fi behavior.
+4. Use the Network button to test Wi-Fi scanning and connection.
+5. Inspect `main.py` first to understand launcher vs secure mode.
+6. Follow the Qt signal flow between `ui/dialogs.py` and `network/wifi_manager.py` for Wi-Fi behavior.
 
 ---
 
