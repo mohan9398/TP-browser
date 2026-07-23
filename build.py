@@ -338,6 +338,13 @@ def build():
             "--enable-plugin=anti-bloat",
         ]
 
+    # College logos — the selector loads these from images/ next to the exe.
+    images_dir = os.path.join(PROJECT_DIR, "images")
+    if os.path.isdir(images_dir):
+        flags.append(f"--include-data-dir={images_dir}=images")
+    else:
+        print(f"[build] WARNING: no images/ dir at {images_dir} — college logos will be missing.")
+
     if os.path.exists(ICON_PATH):
         flags.append(f"--windows-icon-from-ico={ICON_PATH}")
     else:
