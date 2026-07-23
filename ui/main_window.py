@@ -12,6 +12,7 @@ from secure_browser.core.config import ALLOWED_DOMAINS, APP_VERSION, APP_SECRET_
 from secure_browser.ui.browser_engine import SecurePage
 from secure_browser.ui.college_selector import CollegeSelectorWidget
 from secure_browser.network.request_signer import HmacRequestInterceptor
+from secure_browser.network.wifi_manager import WiFiManager
 from PyQt6.QtWebEngineCore import QWebEngineProfile
 
 
@@ -34,10 +35,12 @@ class SecureBrowser(QMainWindow):
 
         self.setup_ui()
         self.setup_clipboard_timer()
+        self._update_wifi_label()
 
         # Show college selector on startup — no URL loaded yet
         self.college_selector.show_selector()
         self._set_nav_visible(False)
+        self._position_version_badge()
 
     # ── UI setup ──────────────────────────────────────────────────────────────
 
@@ -60,28 +63,40 @@ class SecureBrowser(QMainWindow):
 
         self._build_offline_overlay(central)
         self._build_college_selector(central)
+        self._build_version_badge(central)
 
         self.setStyleSheet("""
-            QMainWindow { background: #f9fafb; }
-            QTabWidget::pane { border: none; background: #ffffff; border-top: 1px solid #e5e7eb; }
-            QTabBar { background: #f5f0eb; }
-            QTabBar::tab { background: transparent; color: #6b7280; padding: 10px 20px; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; font-weight: 500; border-radius: 6px; margin: 4px 2px; }
-            QTabBar::tab:selected { background: #ffffff; color: #292524; font-weight: 600; }
-            QTabBar::tab:hover:!selected { background: #ebe4db; color: #374151; }
+            QMainWindow { background: #0f1e21; }
+            QTabWidget::pane { border: none; background: #ffffff; border-top: 1px solid #24393e; }
+            QTabBar { background: #0a1618; }
+            QTabBar::tab { background: transparent; color: #8ba1a5; padding: 9px 20px; font-family: 'Segoe UI', system-ui, sans-serif; font-size: 13px; font-weight: 600; border-radius: 6px; margin: 4px 2px; }
+            QTabBar::tab:selected { background: #123c42; color: #4fc3cf; }
+            QTabBar::tab:hover:!selected { background: #16292d; color: #eef4f5; }
             QTabWidget::tab-bar { alignment: center; }
-            QPushButton { background: transparent; color: #5c544e; border: none; padding: 8px 16px; font-family: 'Segoe UI', system-ui, sans-serif; font-weight: 600; font-size: 14px; border-radius: 6px; }
-            QPushButton:hover { background: #ebe4db; color: #3c3631; }
-            QPushButton:pressed { background: #e0d8ce; }
+            QPushButton { background: transparent; color: #b6c8cb; border: none; padding: 8px 14px; font-family: 'Segoe UI', system-ui, sans-serif; font-weight: 600; font-size: 13px; border-radius: 6px; }
+            QPushButton:hover { background: #1b3237; color: #eef4f5; }
+            QPushButton:pressed { background: #24393e; }
         """)
+
+    def _build_version_badge(self, parent):
+        self.lbl_version = QLabel(f"v{APP_VERSION}", parent)
+        self.lbl_version.setStyleSheet(
+            "background: rgba(255, 255, 255, 0.07); color: #8ba1a5;"
+            " border-radius: 9px; padding: 3px 10px; font-size: 11px;"
+            " font-weight: 600; font-family: 'Segoe UI', system-ui, sans-serif;"
+        )
+        self.lbl_version.adjustSize()
+        self.lbl_version.show()
 
     def _build_college_selector(self, parent):
         self.college_selector = CollegeSelectorWidget(parent)
         self.college_selector.portal_selected.connect(self._on_portal_selected)
+        self.college_selector.exit_requested.connect(self.confirm_exit)
         self.college_selector.hide()
 
     def _build_offline_overlay(self, parent):
         self.offline_overlay = QFrame(parent)
-        self.offline_overlay.setStyleSheet("QFrame { background: #f5f0eb; }")
+        self.offline_overlay.setStyleSheet("QFrame { background: #0f1e21; }")
         ov = QVBoxLayout(self.offline_overlay)
         ov.setContentsMargins(40, 40, 40, 40)
         ov.addStretch()
@@ -89,8 +104,8 @@ class SecureBrowser(QMainWindow):
         card = QFrame()
         card.setMaximumWidth(540)
         card.setStyleSheet(
-            "QFrame { background: #ffffff; border: 1px solid #e6dace;"
-            " border-radius: 16px; }"
+            "QFrame { background: #16292d; border: 1px solid #24393e;"
+            " border-radius: 12px; }"
         )
         cl = QVBoxLayout(card)
         cl.setContentsMargins(48, 44, 48, 44)
@@ -103,7 +118,7 @@ class SecureBrowser(QMainWindow):
         title = QLabel("Check your connection")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet(
-            "font-size: 22px; font-weight: 700; color: #292524;"
+            "font-size: 22px; font-weight: 700; color: #eef4f5;"
             " font-family: 'Segoe UI', system-ui, sans-serif;"
         )
 
@@ -115,7 +130,7 @@ class SecureBrowser(QMainWindow):
         msg.setWordWrap(True)
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         msg.setStyleSheet(
-            "font-size: 15px; color: #6b7280;"
+            "font-size: 15px; color: #8ba1a5;"
             " font-family: 'Segoe UI', system-ui, sans-serif;"
         )
 
@@ -123,16 +138,16 @@ class SecureBrowser(QMainWindow):
         btn_row.addStretch()
         btn_retry = QPushButton("↻ Try Again")
         btn_retry.setStyleSheet(
-            "QPushButton { background: #292524; color: #fff; border: none;"
+            "QPushButton { background: #17808a; color: #fff; border: none;"
             " border-radius: 8px; padding: 12px 26px; font-weight: 600;"
-            " font-size: 15px; } QPushButton:hover { background: #44403c; }"
+            " font-size: 15px; } QPushButton:hover { background: #1c99a5; }"
         )
         btn_net = QPushButton("📶 Network")
         btn_net.setStyleSheet(
-            "QPushButton { background: #ffffff; color: #5c544e;"
-            " border: 1px solid #e6dace; border-radius: 8px; padding: 12px 26px;"
+            "QPushButton { background: #16292d; color: #b6c8cb;"
+            " border: 1px solid #33525a; border-radius: 8px; padding: 12px 26px;"
             " font-weight: 600; font-size: 15px; }"
-            " QPushButton:hover { background: #ebe4db; }"
+            " QPushButton:hover { background: #1b3237; border-color: #17808a; }"
         )
         btn_retry.clicked.connect(self._retry_load)
         btn_net.clicked.connect(self.open_wifi)
@@ -159,7 +174,7 @@ class SecureBrowser(QMainWindow):
     def create_toolbar(self):
         toolbar = QFrame()
         toolbar.setFixedHeight(60)
-        toolbar.setStyleSheet("QFrame { background: #f5f0eb; border-bottom: 1px solid #e6dace; }")
+        toolbar.setStyleSheet("QFrame { background: #0a1618; border-bottom: 1px solid #24393e; }")
         layout = QHBoxLayout(toolbar)
         layout.setContentsMargins(16, 8, 16, 8)
 
@@ -181,8 +196,9 @@ class SecureBrowser(QMainWindow):
         # College name label — shown after a portal is selected
         self.lbl_college = QLabel("")
         self.lbl_college.setStyleSheet(
-            "background: #292524; color: #ffffff; border-radius: 8px;"
-            " padding: 5px 16px; font-size: 13px; font-weight: 700;"
+            "background: #123c42; color: #4fc3cf; border: 1px solid #33525a;"
+            " border-radius: 6px; padding: 5px 14px; font-size: 12px; font-weight: 700;"
+            " letter-spacing: 0.3px;"
             " font-family: 'Segoe UI', system-ui, sans-serif;"
             " margin-left: 8px;"
         )
@@ -190,30 +206,31 @@ class SecureBrowser(QMainWindow):
 
         layout.addStretch()
 
-        lbl_version = QLabel(f"v{APP_VERSION}")
-        lbl_version.setStyleSheet(
-            "color: #a89f91; font-size: 12px; margin-right: 8px; font-weight: 600;"
-            " font-family: 'Segoe UI', system-ui, sans-serif;"
-        )
-        layout.addWidget(lbl_version)
-
         # Change Portal button — shown after a portal is selected
         self.btn_change_portal = QPushButton("⊞ Change Portal")
         self.btn_change_portal.setStyleSheet("""
-            QPushButton { background: #f5f0eb; color: #5c544e; border: 1px solid #d6cec5; border-radius: 6px; padding: 8px 16px; font-weight: 600; font-size: 13px; margin-right: 8px; font-family: 'Segoe UI', system-ui, sans-serif; }
-            QPushButton:hover { background: #ebe4db; color: #292524; border-color: #b5ada5; }
+            QPushButton { background: #16292d; color: #b6c8cb; border: 1px solid #33525a; border-radius: 6px; padding: 8px 16px; font-weight: 600; font-size: 13px; margin-right: 8px; font-family: 'Segoe UI', system-ui, sans-serif; }
+            QPushButton:hover { background: #1b3237; color: #eef4f5; border-color: #17808a; }
         """)
         self.btn_change_portal.clicked.connect(self._show_college_selector)
         layout.addWidget(self.btn_change_portal)
 
         btn_exit = QPushButton("Exit Session")
         btn_exit.setStyleSheet("""
-            QPushButton { background: #fef2f2; color: #ef4444; font-weight: 600; border-radius: 6px; padding: 8px 20px; border: 1px solid #fca5a5; font-family: 'Segoe UI', system-ui, sans-serif; }
-            QPushButton:hover { background: #fee2e2; border-color: #ef4444; color: #dc2626; }
-            QPushButton:pressed { background: #fecaca; }
+            QPushButton { background: #3b1616; color: #f08a7a; font-weight: 600; border-radius: 6px; padding: 8px 20px; border: 1px solid #7a2f2f; font-family: 'Segoe UI', system-ui, sans-serif; }
+            QPushButton:hover { background: #5b1d1d; border-color: #b0472f; color: #ffffff; }
+            QPushButton:pressed { background: #7a2626; }
         """)
         btn_exit.clicked.connect(self.confirm_exit)
         layout.addWidget(btn_exit)
+
+        # Prevent toolbar buttons from grabbing keyboard focus. Otherwise a
+        # focused QPushButton fires its clicked signal on Space/Enter — so a
+        # student pressing Space would accidentally trigger "Exit Session"
+        # (or another button) instead of scrolling the exam page.
+        for w in (self.btn_back, self.btn_forward, self.btn_reload,
+                  self.btn_wifi, self.btn_change_portal, btn_exit):
+            w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         return toolbar
 
@@ -229,6 +246,7 @@ class SecureBrowser(QMainWindow):
         self._set_nav_visible(False)
         self.college_selector.show_selector()
         self._position_college_selector()
+        self._position_version_badge()
 
     def _on_portal_selected(self, college: str, app_name: str, url: str):
         self._active_college = college
@@ -238,11 +256,19 @@ class SecureBrowser(QMainWindow):
         self.lbl_college.setText(f"{college}  ·  {app_name}")
         self._set_nav_visible(True)
 
-        # Clear any existing tabs, then load the selected URL
+        # Clear any existing tabs, then load the selected URL.
+        # Stop in-flight loads first — otherwise a stale loadFinished(False)
+        # from the old page can fire after the new tab is already up and
+        # trigger the "no internet" overlay over a perfectly working page.
         while self.tabs.count():
             widget = self.tabs.widget(0)
             self.tabs.removeTab(0)
             if widget:
+                try:
+                    widget.stop()
+                    widget.page().loadFinished.disconnect(self._on_load_finished)
+                except (RuntimeError, TypeError):
+                    pass
                 widget.deleteLater()
         self.home_view = None
 
@@ -275,10 +301,20 @@ class SecureBrowser(QMainWindow):
                 0, 60, parent.width(), max(0, parent.height() - 60)
             )
 
+    def _position_version_badge(self):
+        if not hasattr(self, 'lbl_version'):
+            return
+        parent = self.lbl_version.parentWidget()
+        if parent:
+            margin = 12
+            self.lbl_version.move(margin, parent.height() - self.lbl_version.height() - margin)
+            self.lbl_version.raise_()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._position_overlay()
         self._position_college_selector()
+        self._position_version_badge()
 
     # ── Load state ────────────────────────────────────────────────────────────
 
@@ -287,6 +323,14 @@ class SecureBrowser(QMainWindow):
         self.reload_page()
 
     def _on_load_finished(self, ok):
+        # Ignore signals from a page that is no longer the active tab — this
+        # can happen when a stale/queued signal from a just-replaced tab
+        # arrives after the new tab has already loaded successfully.
+        current = self.current_view()
+        sender_page = self.sender()
+        if current is None or sender_page is not current.page():
+            return
+
         if ok:
             self.offline_overlay.hide()
         else:
@@ -341,6 +385,11 @@ class SecureBrowser(QMainWindow):
             return
         self.tabs.removeTab(index)
         if widget:
+            try:
+                widget.stop()
+                widget.page().loadFinished.disconnect(self._on_load_finished)
+            except (RuntimeError, TypeError):
+                pass
             widget.deleteLater()
 
     def current_view(self):
@@ -367,8 +416,18 @@ class SecureBrowser(QMainWindow):
     def open_wifi(self):
         from secure_browser.ui.dialogs import WifiDialog
         dialog = WifiDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        self._update_wifi_label()
+        if accepted:
             self.reload_page()
+
+    def _update_wifi_label(self):
+        """Show the connected Wi-Fi SSID on the toolbar button instead of the
+        generic 'Network' label, so the user can see at a glance which
+        network they're on. Clicking it still opens the same Wi-Fi manager.
+        """
+        ssid = WiFiManager.get_current_ssid()
+        self.btn_wifi.setText(f"📶 {ssid}" if ssid else "📶 Network")
 
     # ── Security ──────────────────────────────────────────────────────────────
 
