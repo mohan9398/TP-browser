@@ -1,0 +1,29 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Nuitka build output (main.dist, cython_tmp)
+/build/
+
+# Cython staging dirs created by `build_ext --inplace`
+core/build/
+network/build/
+security/build/
+ui/build/
+
+# Cython in-place artifacts (build.py removes these, but not if it's interrupted)
+*.pyd
+*.pyi
+core/*.c
+network/*.c
+security/*.c
+
+# Compiled installers — these belong on the update server, not in git.
+# A >100MB file here will get your push rejected by GitHub.
+/installer/
+*.exe
+
+# Local env
+.venv/
+venv/
+*.log
