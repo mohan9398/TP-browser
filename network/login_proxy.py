@@ -219,6 +219,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def _forward(self, body=None):
         target_url = self._build_target_url()
+        response_started = False
 
         headers = {"Accept-Encoding": "identity"}
         for k, v in self.headers.items():
@@ -234,7 +235,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         try:
             req = urllib.request.Request(target_url, data=body, headers=headers, method=self.command)
-            opener = urllib.request.build_opener(self.NoRedirectHandler())
+            # Explicitly bypass any system/OS proxy (ProxyHandler({})) — the
+            # target is always our known internal exam server, and honoring
+            # a configured system proxy here can make it unreachable even
+            # though a normal browser (which bypasses proxies for local/
+            # intranet addresses) connects to it fine.
+            opener = urllib.request.build_opener(
+                self.NoRedirectHandler(), urllib.request.ProxyHandler({})
+            )
             with opener.open(req, timeout=30) as resp:
                 encoding = resp.headers.get("Content-Encoding", "")
                 content_type = resp.headers.get("Content-Type", "")
@@ -242,9 +250,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 # If it's a textual type, we must buffer and rewrite
                 # If it's binary, we stream it directly
                 is_text = is_textual_content_type(content_type)
-                
+
                 # Send response code
                 self.send_response(resp.status)
+                response_started = True
 
                 if is_text:
                     raw = resp.read() # Buffer full text
@@ -309,6 +318,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         pass
 
         except urllib.error.HTTPError as e:
+            response_started = True
             body_err = e.read()
             content_type = e.headers.get("Content-Type", "")
 
@@ -348,6 +358,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             log.warning("Proxy could not reach exam server (%s): %s",
                         target_url, e)
+            if response_started:
+                # Headers (and maybe partial body) already went out — sending
+                # another status line now would produce a malformed response
+                # that Chromium reports as a raw connection failure (showing
+                # our app's generic offline overlay) instead of this friendly
+                # page. Just let the connection close.
+                return
             self._send_error_page(
                 502,
                 "Can't reach the exam server",
@@ -404,5 +421,5 @@ def start_proxy() -> int:
         _proxy_port = bound_port_container[0]
         _proxy_origin = f"http://{PROXY_HOST}:{_proxy_port}"
         return _proxy_port
-    
+
     return 0
