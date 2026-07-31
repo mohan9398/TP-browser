@@ -9,23 +9,15 @@ import re
 import html
 from http.server import BaseHTTPRequestHandler
 
-from secure_browser.core.config import TARGET_ORIGIN, TARGET_NETLOC
+from secure_browser.core.config import PROXY_TARGET_ORIGINS
 from secure_browser.core.logger import get_logger
 
 log = get_logger(__name__)
 
 PROXY_HOST = "127.0.0.1"
-_proxy_port = 0
-_proxy_origin = ""
 
-# Extracted from TARGET_ORIGIN
-try:
-    TARGET_PARSED = urllib.parse.urlsplit(TARGET_ORIGIN)
-    TARGET_SCHEME = TARGET_PARSED.scheme
-    TARGET_HOST = TARGET_PARSED.hostname or ""
-    TARGET_PORT = TARGET_PARSED.port
-except Exception as e:
-    TARGET_SCHEME = "http"
+# netloc (host[:port]) -> proxy origin (http://127.0.0.1:<port>)
+_routes = {}
 
 TEXTUAL_CONTENT_TYPES = (
     "text/html",
@@ -39,17 +31,44 @@ TEXTUAL_CONTENT_TYPES = (
     "text/xml",
 )
 
-def get_proxy_origin():
-    """Returns the dynamically assigned proxy origin."""
-    return _proxy_origin
 
-def get_proxy_port():
-    """Returns the dynamically assigned proxy port."""
-    return _proxy_port
+class TargetContext:
+    """Everything one proxy instance needs to forward to a single upstream.
+
+    Each reverse-proxy target gets its own TargetContext and its own localhost
+    port, so the header/cookie/URL-rewriting logic stays as simple as the old
+    single-target proxy — it just reads its target from here instead of module
+    globals.
+    """
+
+    def __init__(self, target_origin: str):
+        parsed = urllib.parse.urlsplit(target_origin)
+        self.target_origin = target_origin.rstrip("/")
+        self.target_scheme = parsed.scheme or "http"
+        self.target_host = parsed.hostname or ""
+        self.target_port = parsed.port
+        self.target_netloc = parsed.netloc  # host[:port], no scheme
+        # Filled in once the server is bound to a port.
+        self.proxy_port = 0
+        self.proxy_origin = ""
+
+
+def get_proxy_routes() -> dict:
+    """Returns {target_netloc: proxy_origin} for every started proxy."""
+    return dict(_routes)
+
+
+def get_proxy_origin() -> str:
+    """Backwards-compatible: the proxy origin for the FIRST target, or ""."""
+    if _routes:
+        return next(iter(_routes.values()))
+    return ""
+
 
 def is_textual_content_type(content_type: str) -> bool:
     ct = (content_type or "").lower()
     return any(x in ct for x in TEXTUAL_CONTENT_TYPES)
+
 
 def decode_bytes(raw: bytes, content_type: str) -> tuple[str, str]:
     ct = content_type or ""
@@ -67,73 +86,84 @@ def decode_bytes(raw: bytes, content_type: str) -> tuple[str, str]:
 
     return raw.decode("utf-8", errors="replace"), "utf-8-replace"
 
-def rewrite_text_payload(text: str, content_type: str) -> tuple[str, int]:
-    count = 0
-    if not _proxy_origin:
-        return text, 0
-        
-    proxy_origin = _proxy_origin
-    proxy_netloc = f"{PROXY_HOST}:{_proxy_port}"
-    
-    # direct origin replacements
-    if TARGET_ORIGIN in text:
-        n = text.count(TARGET_ORIGIN)
-        text = text.replace(TARGET_ORIGIN, proxy_origin)
-        count += n
-
-    # escaped/slashed variants sometimes appear in JSON/JS
-    escaped_target = TARGET_ORIGIN.replace("/", r"\/")
-    escaped_proxy = proxy_origin.replace("/", r"\/")
-    if escaped_target in text:
-        n = text.count(escaped_target)
-        text = text.replace(escaped_target, escaped_proxy)
-        count += n
-
-    # scheme-relative //host[:port]
-    scheme_relative_target = f"//{TARGET_NETLOC}"
-    scheme_relative_proxy = f"//{proxy_netloc}"
-    if scheme_relative_target in text:
-        n = text.count(scheme_relative_target)
-        text = text.replace(scheme_relative_target, scheme_relative_proxy)
-        count += n
-
-    # HTML entity escaped target can show up
-    escaped_html_target = html.escape(TARGET_ORIGIN)
-    escaped_html_proxy = html.escape(proxy_origin)
-    if escaped_html_target in text:
-        n = text.count(escaped_html_target)
-        text = text.replace(escaped_html_target, escaped_html_proxy)
-        count += n
-
-    return text, count
-
-def rewrite_location(location: str) -> tuple[str, bool]:
-    if not location or not _proxy_origin:
-        return location, False
-
-    if location.startswith(TARGET_ORIGIN):
-        rewritten = _proxy_origin + location[len(TARGET_ORIGIN):]
-        return rewritten, True
-
-    if location.startswith("/"):
-        return _proxy_origin + location, True
-
-    return location, False
-
-def rewrite_set_cookie(cookie_value: str) -> tuple[str, bool]:
-    original = cookie_value
-    rewritten = cookie_value
-
-    # Remove Domain=... entirely so cookie becomes host-only for 127.0.0.1
-    rewritten = re.sub(r";\s*Domain=[^;]+", "", rewritten, flags=re.I)
-    # Strip Secure attribute if present to avoid dropping it on http localhost
-    rewritten = re.sub(r";\s*Secure\b", "", rewritten, flags=re.I)
-
-    return rewritten, (rewritten != original)
 
 class ProxyHandler(BaseHTTPRequestHandler):
+    # ── Per-request access to this proxy's target ───────────────────────────
+    @property
+    def ctx(self) -> TargetContext:
+        return self.server.ctx
+
     def log_message(self, fmt, *args):
-        pass # Suppress default logging
+        pass  # Suppress default logging
+
+    # ── Rewriting helpers (target-aware via self.ctx) ───────────────────────
+    def rewrite_text_payload(self, text: str, content_type: str) -> tuple[str, int]:
+        ctx = self.ctx
+        count = 0
+        if not ctx.proxy_origin:
+            return text, 0
+
+        proxy_origin = ctx.proxy_origin
+        proxy_netloc = f"{PROXY_HOST}:{ctx.proxy_port}"
+        target_origin = ctx.target_origin
+        target_netloc = ctx.target_netloc
+
+        # direct origin replacements
+        if target_origin in text:
+            n = text.count(target_origin)
+            text = text.replace(target_origin, proxy_origin)
+            count += n
+
+        # escaped/slashed variants sometimes appear in JSON/JS
+        escaped_target = target_origin.replace("/", r"\/")
+        escaped_proxy = proxy_origin.replace("/", r"\/")
+        if escaped_target in text:
+            n = text.count(escaped_target)
+            text = text.replace(escaped_target, escaped_proxy)
+            count += n
+
+        # scheme-relative //host[:port]
+        scheme_relative_target = f"//{target_netloc}"
+        scheme_relative_proxy = f"//{proxy_netloc}"
+        if scheme_relative_target in text:
+            n = text.count(scheme_relative_target)
+            text = text.replace(scheme_relative_target, scheme_relative_proxy)
+            count += n
+
+        # HTML entity escaped target can show up
+        escaped_html_target = html.escape(target_origin)
+        escaped_html_proxy = html.escape(proxy_origin)
+        if escaped_html_target in text:
+            n = text.count(escaped_html_target)
+            text = text.replace(escaped_html_target, escaped_html_proxy)
+            count += n
+
+        return text, count
+
+    def rewrite_location(self, location: str) -> tuple[str, bool]:
+        ctx = self.ctx
+        if not location or not ctx.proxy_origin:
+            return location, False
+
+        if location.startswith(ctx.target_origin):
+            rewritten = ctx.proxy_origin + location[len(ctx.target_origin):]
+            return rewritten, True
+
+        if location.startswith("/"):
+            return ctx.proxy_origin + location, True
+
+        return location, False
+
+    def rewrite_set_cookie(self, cookie_value: str) -> tuple[str, bool]:
+        original = cookie_value
+        rewritten = cookie_value
+
+        # Remove Domain=... entirely so cookie becomes host-only for 127.0.0.1
+        rewritten = re.sub(r";\s*Domain=[^;]+", "", rewritten, flags=re.I)
+        # Strip Secure attribute if present to avoid dropping it on http localhost
+        rewritten = re.sub(r";\s*Secure\b", "", rewritten, flags=re.I)
+
+        return rewritten, (rewritten != original)
 
     def _send_error_page(self, code: int, title: str, message: str):
         """Send a calm, branded HTML error page instead of a raw 502.
@@ -196,19 +226,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
         return raw
 
     def _build_target_url(self) -> str:
+        ctx = self.ctx
         if self.path.startswith("http://") or self.path.startswith("https://"):
             parsed = urllib.parse.urlsplit(self.path)
-            if parsed.hostname == PROXY_HOST and parsed.port == _proxy_port:
+            if parsed.hostname == PROXY_HOST and parsed.port == ctx.proxy_port:
                 rebuilt = urllib.parse.urlunsplit((
-                    TARGET_SCHEME,
-                    TARGET_NETLOC,
+                    ctx.target_scheme,
+                    ctx.target_netloc,
                     parsed.path,
                     parsed.query,
                     parsed.fragment,
                 ))
                 return rebuilt
             return self.path
-        return f"{TARGET_ORIGIN}{self.path}"
+        return f"{ctx.target_origin}{self.path}"
 
     class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -218,6 +249,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
     def _forward(self, body=None):
+        ctx = self.ctx
         target_url = self._build_target_url()
         response_started = False
 
@@ -225,13 +257,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         for k, v in self.headers.items():
             kl = k.lower()
             if kl == "host":
-                headers["Host"] = TARGET_NETLOC
+                headers["Host"] = ctx.target_netloc
             elif kl not in ("content-length", "transfer-encoding", "connection", "accept-encoding", "origin", "referer"):
                 headers[k] = v
             elif kl == "origin":
-                headers[k] = TARGET_ORIGIN
+                headers[k] = ctx.target_origin
             elif kl == "referer":
-                headers[k] = v.replace(_proxy_origin, TARGET_ORIGIN)
+                headers[k] = v.replace(ctx.proxy_origin, ctx.target_origin)
 
         try:
             req = urllib.request.Request(target_url, data=body, headers=headers, method=self.command)
@@ -257,13 +289,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
                 if is_text:
                     raw = resp.read() # Buffer full text
-                    
+
                     if encoding and encoding.lower() not in ("identity", ""):
                         raw = self._decompress(raw, encoding)
 
                     text, encoding_used = decode_bytes(raw, content_type)
-                    rewritten_text, replacements = rewrite_text_payload(text, content_type)
-                    
+                    rewritten_text, replacements = self.rewrite_text_payload(text, content_type)
+
                     if replacements:
                         raw = rewritten_text.encode(encoding_used, errors="replace")
                     else:
@@ -275,11 +307,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         if kl in ("transfer-encoding", "content-encoding", "connection", "keep-alive"):
                             continue
                         if kl == "location":
-                            new_v, changed = rewrite_location(v)
+                            new_v, changed = self.rewrite_location(v)
                             self.send_header(k, new_v)
                             continue
                         if kl == "set-cookie":
-                            new_v, changed = rewrite_set_cookie(v)
+                            new_v, changed = self.rewrite_set_cookie(v)
                             self.send_header(k, new_v)
                             continue
                         if kl == "content-length":
@@ -289,7 +321,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     self.send_header("Content-Length", str(len(raw)))
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
-                    
+
                     try:
                         self.wfile.write(raw)
                     except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
@@ -304,10 +336,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         if kl in ("transfer-encoding", "connection", "keep-alive"):
                             continue
                         self.send_header(k, v)
-                        
+
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
-                    
+
                     try:
                         while True:
                             chunk = resp.read(8192) # 8KB chunks
@@ -325,7 +357,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if is_textual_content_type(content_type):
                 try:
                     text, enc = decode_bytes(body_err, content_type)
-                    text2, replacements = rewrite_text_payload(text, content_type)
+                    text2, replacements = self.rewrite_text_payload(text, content_type)
                     if replacements:
                         body_err = text2.encode(enc, errors="replace")
                 except Exception as ex:
@@ -337,11 +369,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 if kl in ("transfer-encoding", "content-encoding", "connection", "content-length"):
                     continue
                 if kl == "location":
-                    new_v, changed = rewrite_location(v)
+                    new_v, changed = self.rewrite_location(v)
                     self.send_header(k, new_v)
                     continue
                 if kl == "set-cookie":
-                    new_v, changed = rewrite_set_cookie(v)
+                    new_v, changed = self.rewrite_set_cookie(v)
                     self.send_header(k, new_v)
                     continue
                 self.send_header(k, v)
@@ -393,33 +425,60 @@ class ThreadedProxy(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    def __init__(self, server_address, handler_cls, ctx: TargetContext):
+        self.ctx = ctx
+        super().__init__(server_address, handler_cls)
 
-def start_proxy() -> int:
-    """
-    Starts the proxy on a dynamic port and returns the port bound.
-    """
-    global _proxy_port, _proxy_origin
+
+def _start_one(target_origin: str) -> TargetContext | None:
+    """Start a single proxy bound to a free localhost port for one target."""
+    ctx = TargetContext(target_origin)
+    if not ctx.target_host:
+        log.warning("Skipping proxy target with no host: %r", target_origin)
+        return None
+
     ready = threading.Event()
-    bound_port_container = []
+    holder = {}
 
     def _run():
         try:
-            # Bind to port 0 to let OS pick a free port
-            srv = ThreadedProxy((PROXY_HOST, 0), ProxyHandler)
-            allocated_port = srv.server_address[1]
-            bound_port_container.append(allocated_port)
+            srv = ThreadedProxy((PROXY_HOST, 0), ProxyHandler, ctx)
+            ctx.proxy_port = srv.server_address[1]
+            ctx.proxy_origin = f"http://{PROXY_HOST}:{ctx.proxy_port}"
+            holder["ok"] = True
             ready.set()
             srv.serve_forever()
-        except Exception as e:
+        except Exception:
+            log.exception("Proxy failed to start for %s", target_origin)
             ready.set()
 
-    t = threading.Thread(target=_run, daemon=True, name="ProxyServer")
-    t.start()
+    threading.Thread(
+        target=_run, daemon=True, name=f"Proxy-{ctx.target_host}"
+    ).start()
     ready.wait(timeout=5)
-    
-    if bound_port_container:
-        _proxy_port = bound_port_container[0]
-        _proxy_origin = f"http://{PROXY_HOST}:{_proxy_port}"
-        return _proxy_port
+    return ctx if holder.get("ok") else None
 
-    return 0
+
+def start_proxy(target_origins=None) -> dict:
+    """
+    Start one reverse proxy per target origin.
+
+    Returns {target_netloc: proxy_origin}, e.g.
+        {"172.168.11.105": "http://127.0.0.1:51234",
+         "172.168.15.213": "http://127.0.0.1:51235"}
+
+    The mapping is also stored globally (see get_proxy_routes()).
+    """
+    global _routes
+    if target_origins is None:
+        target_origins = PROXY_TARGET_ORIGINS
+
+    routes = {}
+    for origin in target_origins:
+        ctx = _start_one(origin)
+        if ctx:
+            routes[ctx.target_netloc] = ctx.proxy_origin
+            log.info("Proxy up: %s  ->  %s", ctx.target_netloc, ctx.proxy_origin)
+
+    _routes = routes
+    return routes

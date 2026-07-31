@@ -33,7 +33,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Secure Exam Browser (dev)")
 
-    browser = SecureBrowser(proxy_origin=None)
+    browser = SecureBrowser(proxy_routes=None)
     # Windowed instead of full-screen, and closable with the X / Alt+F4, so a
     # dev run doesn't trap you behind the exam-mode close guard.
     browser.setWindowFlags(Qt.WindowType.Window)

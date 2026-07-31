@@ -10,7 +10,7 @@ Last documented: 2026-07-27
 > Google Docs.
 
 ---
-
+ c
 ## 1. What this app is
 
 TeleBrowser is a locked-down browser for online examinations. It runs only on

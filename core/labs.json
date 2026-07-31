@@ -1,57 +1,92 @@
 {
-  "colleges": ["NGIT", "KMIT", "KMEC", "KMCE"],
+  "colleges": ["KMIT", "NGIT", "KMEC", "KMCE"],
   "portals": {
-    "NGIT": [
+    "KMIT": [
       {
-        "app": "Test Center",
-        "slug": "testcenter",
-        "url": "http://172.168.15.216:8000"
+        "app": "Class Room (Auditorium)",
+        "slug": "classroomAS",
+        "url": "http://10.11.52.100"
       },
       {
-        "app": "google",
-        "slug": "google",
-        "url": "http://www.google.com"
+        "app": "Class Room (FS)",
+        "slug": "classroomFs",
+        "url": "http://10.11.1.19"
       },
       {
-        "app": "Toofan",
-        "slug": "toofan",
+        "app": "Exam",
+        "slug": "exam",
+        "url": "http://10.11.36.18:81"
+      },
+      {
+        "app": "Exam (Auditorium)",
+        "slug": "examAuditorium",
+        "url": "http://10.11.52.100:541"
+      },
+      {
+        "app": "Toofan online",
+        "slug": "toofanON",
+        "url": "https://toofaanonline.teleuniv.in:535"
+      },
+      {
+        "app": "Testing",
+        "slug": "testing",
         "url": "http://172.168.15.213/toofan"
       }
     ],
-    "KMIT": [
+    "NGIT": [
       {
-        "app": "Test Center",
-        "slug": "testcenter",
-        "url": "http://172.168.15.216:8000"
+        "app": "Class Room",
+        "slug": "classroom",
+        "url": "http://192.168.2.5:81"
       },
       {
-        "app": "Toofan",
-        "slug": "toofan",
-        "url": "http://172.168.15.213/toofan"
+        "app": "Exam",
+        "slug": "exam",
+        "url": "http://192.168.2.5/exam"
+      },
+      {
+        "app": "Exam",
+        "slug": "exam",
+        "url": "http://10.11.53.100:541"
+      },
+      {
+        "app": "Toofan online",
+        "slug": "toofanON",
+        "url": "https://toofaanonline.teleuniv.in:535"
       }
     ],
     "KMEC": [
       {
-        "app": "Test Center",
-        "slug": "testcenter",
-        "url": "http://172.168.15.216:8000"
+        "app": "Class Room",
+        "slug": "classroom",
+        "url": "http://192.168.6.5:81"
       },
       {
-        "app": "Toofan",
-        "slug": "toofan",
-        "url": "http://172.168.15.213/toofan"
+        "app": "Exam",
+        "slug": "exam",
+        "url": "http://192.168.6.5/exam"
+      },
+      {
+        "app": "Toofan online",
+        "slug": "toofanON",
+        "url": "https://toofaanonline.teleuniv.in:535"
       }
     ],
     "KMCE": [
       {
-        "app": "Test Center",
-        "slug": "testcenter",
-        "url": "http://172.168.15.216:8000"
+        "app": "Class Room",
+        "slug": "classroom",
+        "url": "http://192.168.51.10:88/"
       },
       {
-        "app": "Toofan",
-        "slug": "toofan",
-        "url": "http://172.168.15.213/toofan"
+        "app": "Exam",
+        "slug": "exam",
+        "url": "http://192.168.51.20:541/"
+      },
+      {
+        "app": "Toofan online",
+        "slug": "toofanON",
+        "url": "https://toofaanonline.teleuniv.in:535"
       }
     ]
   }

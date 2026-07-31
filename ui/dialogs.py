@@ -36,19 +36,16 @@ class WifiDialog(QDialog):
         btn_layout = QHBoxLayout()
         self.btn_refresh = QPushButton("🔄 Refresh")
         self.btn_connect = QPushButton("🔗 Connect")
-        self.btn_show_pw = QPushButton("🔑 Show Password")
         self.btn_close = QPushButton("✖ Close")
 
         btn_layout.addWidget(self.btn_refresh)
         btn_layout.addWidget(self.btn_connect)
-        btn_layout.addWidget(self.btn_show_pw)
         btn_layout.addStretch()
         btn_layout.addWidget(self.btn_close)
         layout.addLayout(btn_layout)
 
         self.btn_refresh.clicked.connect(self.refresh)
         self.btn_connect.clicked.connect(self.connect)
-        self.btn_show_pw.clicked.connect(self.show_password)
         self.btn_close.clicked.connect(self.close)
 
         self.refresh()
@@ -106,28 +103,6 @@ class WifiDialog(QDialog):
         self.progress.setRange(0, 0)
         self.btn_connect.setEnabled(False)
         self.wifi_mgr.connect_async(ssid, password)
-
-    def show_password(self):
-        """Reveal the stored password for a saved network (Windows + admin)."""
-        ssid = self._selected_ssid()
-        if not ssid:
-            return
-        if ssid not in self._saved_ssids:
-            QMessageBox.information(
-                self, "No Saved Password",
-                f"'{ssid}' has no saved profile on this PC yet."
-            )
-            return
-        pw = self.wifi_mgr.get_saved_password(ssid)
-        if pw:
-            QMessageBox.information(self, "Saved Password", f"{ssid}:\n\n{pw}")
-        else:
-            QMessageBox.warning(
-                self, "Password Unavailable",
-                "Could not read the saved password.\n\n"
-                "Windows only reveals it when the browser is run as "
-                "Administrator. You can still connect with one click."
-            )
 
     def closeEvent(self, event):
         # Don't leave a scan running in the background after the dialog closes.

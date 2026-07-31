@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
 
-from secure_browser.core.config import ALLOWED_DOMAINS, APP_VERSION, APP_SECRET_KEY, TARGET_NETLOC
+from secure_browser.core.config import ALLOWED_DOMAINS, APP_VERSION, APP_SECRET_KEY
 from secure_browser.ui.browser_engine import SecurePage
 from secure_browser.ui.college_selector import CollegeSelectorWidget
 from secure_browser.network.request_signer import HmacRequestInterceptor
@@ -17,7 +17,7 @@ from PyQt6.QtWebEngineCore import QWebEngineProfile
 
 
 class SecureBrowser(QMainWindow):
-    def __init__(self, proxy_origin=None):
+    def __init__(self, proxy_routes=None):
         super().__init__()
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
@@ -27,7 +27,11 @@ class SecureBrowser(QMainWindow):
         self.setWindowTitle("Secure Exam Browser")
         self.home_view = None
         self._allow_close = False
-        self.proxy_origin = proxy_origin
+        # {target_netloc: proxy_origin} — which hosts to route through a proxy.
+        # Accept a bare string for backwards compatibility with old callers.
+        if isinstance(proxy_routes, str):
+            proxy_routes = {}
+        self.proxy_routes = proxy_routes or {}
         self._active_college = None
 
         self.interceptor = HmacRequestInterceptor(APP_SECRET_KEY, parent=self)
@@ -241,8 +245,27 @@ class SecureBrowser(QMainWindow):
 
     # ── College selector integration ──────────────────────────────────────────
 
+    def _clear_all_tabs(self):
+        """Stop and destroy every tab. Destroying the QWebEngineView tears
+        down the page's JS context, which releases any active getUserMedia
+        stream -- otherwise the camera stays on behind whatever is shown next."""
+        while self.tabs.count():
+            widget = self.tabs.widget(0)
+            self.tabs.removeTab(0)
+            if widget:
+                try:
+                    widget.stop()
+                    widget.page().loadFinished.disconnect(self._on_load_finished)
+                except (RuntimeError, TypeError):
+                    pass
+                widget.deleteLater()
+        self.home_view = None
+
     def _show_college_selector(self):
         self.offline_overlay.hide()
+        # Destroy the live exam page before showing the selector -- otherwise
+        # its camera stream keeps running behind the overlay.
+        self._clear_all_tabs()
         self._set_nav_visible(False)
         self.college_selector.show_selector()
         self._position_college_selector()
@@ -260,27 +283,30 @@ class SecureBrowser(QMainWindow):
         # Stop in-flight loads first — otherwise a stale loadFinished(False)
         # from the old page can fire after the new tab is already up and
         # trigger the "no internet" overlay over a perfectly working page.
-        while self.tabs.count():
-            widget = self.tabs.widget(0)
-            self.tabs.removeTab(0)
-            if widget:
-                try:
-                    widget.stop()
-                    widget.page().loadFinished.disconnect(self._on_load_finished)
-                except (RuntimeError, TypeError):
-                    pass
-                widget.deleteLater()
-        self.home_view = None
+        self._clear_all_tabs()
 
         self.create_new_tab(self._build_url(url), f"{college} — {app_name}", is_home=True)
 
     def _build_url(self, target: str) -> QUrl:
         parsed = QUrl(target)
-        # Only route through the local proxy for the face-login server —
-        # it rewrites the Origin header so camera permissions work over HTTP.
-        # All other URLs (different IPs, Google, etc.) load directly.
-        if self.proxy_origin and parsed.host() == TARGET_NETLOC:
-            return QUrl(self.proxy_origin + parsed.path())
+        # Route through the local proxy only for configured target servers —
+        # the proxy rewrites the Origin header so camera permissions work over
+        # HTTP. All other URLs (Test Center, Google, etc.) load directly.
+        #
+        # Match on EXACT host[:port] so two targets on the same host but
+        # different ports stay distinct (e.g. 192.168.2.5:81 vs 192.168.2.5).
+        # A URL with a port that isn't a configured target must NOT fall back to
+        # a same-host proxy on a different port — that would mis-route it.
+        # Requires the URL to have a real scheme (http://) — without it QUrl
+        # can't parse the host and nothing gets proxied.
+        host = parsed.host()
+        netloc = f"{host}:{parsed.port()}" if parsed.port() != -1 else host
+        proxy_origin = self.proxy_routes.get(netloc)
+        if proxy_origin:
+            tail = parsed.path()
+            if parsed.query():
+                tail += "?" + parsed.query()
+            return QUrl(proxy_origin + tail)
         return parsed
 
     # ── Overlay positioning ───────────────────────────────────────────────────
@@ -400,8 +426,16 @@ class SecureBrowser(QMainWindow):
 
     def go_back(self):
         v = self.current_view()
-        if v:
+        if not v:
+            return
+        # Within the exam site, Back walks the page's own history. Once that
+        # history is exhausted (we're at the portal's first page), Back leaves
+        # the site entirely and returns to the portal-selection screen -- which
+        # is an overlay, not a history entry, so v.back() can't reach it.
+        if v.history().canGoBack():
             v.back()
+        else:
+            self._show_college_selector()
 
     def go_forward(self):
         v = self.current_view()

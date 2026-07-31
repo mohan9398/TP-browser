@@ -28,20 +28,55 @@ except Exception:
 # TODO: Change to HTTPS when available
 UPDATE_CHECK_URL = "https://kmit.in/download"
 
-TARGET_ORIGIN = "http://172.168.15.213"
-TARGET_NETLOC = "172.168.15.213"
 
-ALLOWED_DOMAINS = [
-    "https://elms.kmce.in/download",
-    "192.168.2.5",
-    "172.168.15.213", 
-    "ksjc.teleuniv.in", 
-    "teleuniv.in", 
-    "172.168.15.218",
-    "172.168.15.215",
-    "172.168.15.216",
-    "172.168.13.69"
+PROXY_TARGET_ORIGINS = [
+    # TODO: add the servers that need camera/mic over HTTP, e.g.
+      "http://10.11.52.100",
+      "http://10.11.1.19",
+      "http://10.11.36.18:81",
+      "http://10.11.52.100:541",
+      "https://toofaanonline.teleuniv.in:535"
+      "http://192.168.2.5:81",
+      "http://192.168.2.5/exam",
+      "http://10.11.52.200",
+      "http://192.168.6.5:81",
+      "http://192.168.6.5/exam",
+      "http://192.168.51.10:88/",
+      "http://192.168.51.20:541/"
+
 ]
+
+# Backwards-compatible single-target aliases (first entry, if any).
+TARGET_ORIGIN = PROXY_TARGET_ORIGINS[0] if PROXY_TARGET_ORIGINS else ""
+TARGET_NETLOC = TARGET_ORIGIN.split("://", 1)[-1] if TARGET_ORIGIN else ""
+
+# Hosts the browser is allowed to navigate to. Proxied targets reach the browser
+# as 127.0.0.1 (always allowed), but list their hosts here too so media
+# permissions are granted and any direct fallback still works. Add the host of
+# every portal used in labs.json — including direct-load ones.
+ALLOWED_DOMAINS = [
+    # KMIT
+    "10.11.52.100",
+    "10.11.1.19",
+    "10.11.36.18",
+    "toofaanlab.teleuniv.in",
+    # NGIT
+    "192.168.2.5",
+    "10.11.53.100",
+    "10.11.52.200",
+    # KMEC
+    "192.168.6.5",
+    # KMCE
+    "192.168.51.10",
+    "192.168.51.20",
+]
+
+# Make sure every reverse-proxy target host is allowed, without duplicating
+# entries the maintainer already listed above.
+for _origin in PROXY_TARGET_ORIGINS:
+    _host = _origin.split("://", 1)[-1].split(":", 1)[0]
+    if _host not in ALLOWED_DOMAINS:
+        ALLOWED_DOMAINS.append(_host)
  
 # Security Configuration
 # Apps that will be blocked/killed during the exam

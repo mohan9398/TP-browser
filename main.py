@@ -162,8 +162,9 @@ def run_child_process():
             target=anti_debug_loop, args=(60.0,), daemon=True, name="AntiDebug"
         ).start()
 
-        # 2.5 Start the Local Proxy Server BEFORE Qt initialization
-        allocated_port = start_proxy()
+        # 2.5 Start the Local Proxy Server(s) BEFORE Qt initialization.
+        # Returns {target_netloc: proxy_origin} — one proxy per configured target.
+        proxy_routes = start_proxy()
         
         # 3. Launch UI
         if hasattr(Qt, 'AA_EnableHighDpiScaling'):
@@ -178,11 +179,9 @@ def run_child_process():
         # Chromium reads from sys.argv before QApplication is fully constructed.
         # By injecting the flags into sys.argv, we guarantee Chromium sees them
         # regardless of OS-level environment variable inheritance issues.
-        # We also treat the dynamic proxy origin as secure.
-        proxy_origin = get_proxy_origin()
+        # We also treat every dynamic proxy origin as secure.
         origins_list = [f"http://{d}" for d in ALLOWED_DOMAINS]
-        if proxy_origin:
-            origins_list.append(proxy_origin)
+        origins_list.extend(proxy_routes.values())
         _origins = ",".join(origins_list)
         
         _injected_flags = QT_FLAGS.split() if QT_FLAGS else []
@@ -195,7 +194,7 @@ def run_child_process():
  
         app = QApplication(sys.argv)
         app.setApplicationName("Secure Exam Browser")
-        browser = SecureBrowser(proxy_origin)
+        browser = SecureBrowser(proxy_routes)
         browser.showFullScreen()
         
         exit_code = app.exec()
