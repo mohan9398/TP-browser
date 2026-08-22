@@ -31,12 +31,12 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
  
 from secure_browser.core.config import QT_FLAGS, APP_VERSION, ALLOWED_DOMAINS
-from secure_browser.security.system_locker import sys_lock
-from secure_browser.security.process_monitor import ProcessSentinel
-from secure_browser.security.anti_debug import probe_environment, anti_debug_loop
+from secure_browser.security.wsession import sys_lock
+from secure_browser.security.watchdog import ProcessSentinel
+from secure_browser.security.envprobe import probe_environment, anti_debug_loop
 from secure_browser.network.updater import check_for_update, UPDATE_AVAILABLE
 from secure_browser.ui.update_progress import UpdateProgressWindow
-from secure_browser.network.login_proxy import start_proxy, get_proxy_origin
+from secure_browser.network.localgw import start_proxy, get_proxy_origin
 from secure_browser.ui.main_window import SecureBrowser
  
 # Windows API for Secure Desktop

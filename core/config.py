@@ -11,39 +11,56 @@ USER_AGENT = (
 
 # New Time-Based HMAC Security Config
 # The key is stored encrypted (obfuscation-at-rest) so it does not appear in
-# plaintext inside the compiled binary. See core/secrets.py. To rotate it,
-# run:  python -c "from core.secrets import encrypt; print(encrypt('NEWKEY'))"
+# plaintext inside the compiled binary. See core/codec.py. To rotate it,
+# run:  python -c "from core.codec import encrypt; print(encrypt('NEWKEY'))"
 # and paste the token below.
 _APP_SECRET_KEY_ENC = (
     "gAAAAABqOlPDOE_8PSOigsjRm23Aj9SxTJmzrl5imoZm0Mx0gyn7defKjesc-GX_c-Is75k4UbEZhpRey8oDXAhtPd8NmHyL29H3jDyYK4jsIUDn9WgvWgw="
 )
 
-try:
-    from secure_browser.core.secrets import decrypt as _decrypt
-    APP_SECRET_KEY = _decrypt(_APP_SECRET_KEY_ENC)
-except Exception:
-    # Fallback keeps the app running even if the crypto layer is unavailable.
-    APP_SECRET_KEY = "my_production_secret_key_12345"
+def get_app_secret_key() -> str:
+    """Return the HMAC key, decrypted on demand.
+
+    The key is deliberately NOT stored as a module-level global anymore, so
+    ``import config; print(config.APP_SECRET_KEY)`` no longer leaks it. Callers
+    fetch it right before use and drop the reference afterwards.
+
+    The guard inside codec.decrypt() also refuses if the shipped binary is
+    imported under a standalone Python interpreter (the copy-and-dump attack) —
+    that RuntimeError is intentionally NOT swallowed by the fallback below.
+    """
+    from secure_browser.core.codec import decrypt as _decrypt, _running_under_bare_python
+    if _running_under_bare_python():
+        raise RuntimeError("secure runtime required")
+    try:
+        return _decrypt(_APP_SECRET_KEY_ENC)
+    except RuntimeError:
+        raise
+    except Exception:
+        # Fallback only for a genuinely missing/broken crypto layer — never
+        # reached in the real app, where cryptography is bundled.
+        return "my_production_secret_key_12345"
  
 # TODO: Change to HTTPS when available
 UPDATE_CHECK_URL = "https://kmit.in/download"
 
 
 PROXY_TARGET_ORIGINS = [
-    # TODO: add the servers that need camera/mic over HTTP, e.g.
-      "http://10.11.52.100",
-      "http://10.11.1.19",
-      "http://10.11.36.18:81",
-      "http://10.11.52.100:541",
-      "https://toofaanonline.teleuniv.in:535"
-      "http://192.168.2.5:81",
-      "http://192.168.2.5/exam",
-      "http://10.11.52.200",
-      "http://192.168.6.5:81",
-      "http://192.168.6.5/exam",
-      "http://192.168.51.10:88/",
-      "http://192.168.51.20:541/"
-
+    # Servers that need camera/mic over HTTP. Origin only (scheme://host[:port]) —
+    # NO path, and DON'T forget the comma after every entry.
+    "http://10.11.52.100",
+    "http://10.11.1.19",
+    "http://10.11.36.18:81",
+    "http://10.11.52.100:541",
+    "https://toofaanonline.teleuniv.in:535",
+    "http://192.168.2.5:81",
+    "http://192.168.2.5",
+    "http://10.11.52.200",
+    "http://192.168.6.5:81",
+    "http://192.168.6.5",
+    "http://192.168.51.10:88",
+    "http://192.168.51.20:541",
+    "http://172.168.15.213",
 ]
 
 # Backwards-compatible single-target aliases (first entry, if any).
@@ -69,6 +86,7 @@ ALLOWED_DOMAINS = [
     # KMCE
     "192.168.51.10",
     "192.168.51.20",
+    "172.168.15.213"
 ]
 
 # Make sure every reverse-proxy target host is allowed, without duplicating

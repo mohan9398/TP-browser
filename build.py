@@ -83,12 +83,12 @@ ICON_PATH        = os.path.join(PROJECT_DIR, "Browser.ico")
 # These are the modules that contain security logic, secrets, and signing code.
 CYTHON_MODULES = [
     "core/config.py",
-    "core/secrets.py",
-    "security/anti_debug.py",
-    "security/process_monitor.py",
-    "security/system_locker.py",
-    "network/request_signer.py",
-    "network/login_proxy.py",
+    "core/codec.py",
+    "security/envprobe.py",
+    "security/watchdog.py",
+    "security/wsession.py",
+    "network/netheaders.py",
+    "network/localgw.py",
 ]
 
 
@@ -148,9 +148,18 @@ def compile_cython_modules():
         setup_code = (
             "from setuptools import setup, Extension\n"
             "from Cython.Build import cythonize\n"
+            # Tier 1 hardening: strip docstrings from the compiled module so
+            # `strings <module>.pyd` no longer reveals things like
+            # encrypt/decrypt/"Decrypt a token produced by encrypt()..." — i.e.
+            # remove the map that tells an analyst where each protection lives.
+            "from Cython.Compiler import Options\n"
+            "Options.docstrings = False\n"
             "setup(\n"
             "    ext_modules=cythonize(\n"
-            f"        [Extension('{basename}', [r'{src_py}'])],\n"
+            # Pass a RELATIVE source name (cwd is already the module's dir). Using
+            # the absolute path here embedded C:\\Users\\<name>\\...\\config.c into
+            # the .pyd, leaking the developer username and project layout.
+            f"        [Extension('{basename}', [r'{basename}.py'])],\n"
             "        language_level=3,\n"
             "        compiler_directives={\n"
             "            'boundscheck': False,\n"
@@ -270,6 +279,30 @@ def ensure_package_name():
     return PARENT_DIR, _cleanup
 
 
+def purge_stale_artifacts():
+    """Remove any Cython .pyd/.c left next to the source modules.
+
+    A previous build that was interrupted (Ctrl+C) skips its cleanup and leaves
+    compiled .pyd files in the source tree. Python then imports those .pyd over
+    the .py — which also makes the anti-tamper guard in codec.py fire during
+    normal `python` runs. Wipe them before every build so the tree is always
+    clean going in.
+    """
+    removed = 0
+    for module_rel in CYTHON_MODULES:
+        src_dir  = os.path.dirname(os.path.join(PROJECT_DIR, module_rel))
+        basename = os.path.splitext(os.path.basename(module_rel))[0]
+        for pattern in (f"{basename}*.pyd", f"{basename}.c"):
+            for path in glob.glob(os.path.join(src_dir, pattern)):
+                try:
+                    os.remove(path)
+                    removed += 1
+                except Exception:
+                    pass
+    if removed:
+        print(f"[build] Pre-clean: removed {removed} stale Cython artifact(s) from source.")
+
+
 def build():
     if sys.platform != "win32":
         print("ERROR: This is a Windows-only application.")
@@ -282,6 +315,10 @@ def build():
 
     version = read_app_version()
     file_version = ".".join((version + ".0.0.0").split(".")[:4])
+
+    # Always start from a clean source tree (guards against an interrupted
+    # previous build leaving .pyd files behind).
+    purge_stale_artifacts()
 
     # ── Step 1: Cython ────────────────────────────────────────────────────────
     pyd_files, c_files = [], []
@@ -352,14 +389,25 @@ def build():
 
     flags.append(main_script)
 
+    lto_on = use_lto or harden
+    est = "20-40 min" if lto_on else "5-15 min"
     print(f"[build] Version     : {version}")
     print(f"[build] Run dir     : {package_root}")
     print(f"[build] Cython .pyd : {len(pyd_files)} pre-compiled modules")
+    print(f"[build] LTO         : {'ON (--harden/--lto) — slow link at the end' if lto_on else 'off (faster)'}")
+    print("-" * 70)
+    print(f"[build] Compiling PyQt6 + Qt WebEngine — this takes about {est}.")
+    print("[build] ****  DO NOT press Ctrl+C  ****  An interrupted build leaves")
+    print("[build] an unusable dist. Let it run to the '[build] SUCCESS' line.")
     print("-" * 70)
 
+    import time as _time
+    _t0 = _time.time()
     try:
         result = subprocess.run(flags, cwd=package_root)
     finally:
+        _mins = (_time.time() - _t0) / 60.0
+        print(f"[build] Nuitka step ran for {_mins:.1f} min.")
         junction_cleanup()
         _cleanup_cython_artifacts(pyd_files, c_files)
 

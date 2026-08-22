@@ -46,7 +46,14 @@ class TargetContext:
         self.target_origin = target_origin.rstrip("/")
         self.target_scheme = parsed.scheme or "http"
         self.target_host = parsed.hostname or ""
-        self.target_port = parsed.port
+        # parsed.port raises ValueError on a malformed netloc (e.g. a missing
+        # comma glued two origins together). Treat that as "no host" so
+        # start_proxy skips this entry instead of crashing the whole app.
+        try:
+            self.target_port = parsed.port
+        except ValueError:
+            self.target_port = None
+            self.target_host = ""
         self.target_netloc = parsed.netloc  # host[:port], no scheme
         # Filled in once the server is bound to a port.
         self.proxy_port = 0
@@ -475,7 +482,12 @@ def start_proxy(target_origins=None) -> dict:
 
     routes = {}
     for origin in target_origins:
-        ctx = _start_one(origin)
+        # One bad entry must never stop the app from opening — skip and continue.
+        try:
+            ctx = _start_one(origin)
+        except Exception:
+            log.exception("Skipping bad proxy target: %r", origin)
+            continue
         if ctx:
             routes[ctx.target_netloc] = ctx.proxy_origin
             log.info("Proxy up: %s  ->  %s", ctx.target_netloc, ctx.proxy_origin)

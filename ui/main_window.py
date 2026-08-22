@@ -8,10 +8,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEnginePage
 
-from secure_browser.core.config import ALLOWED_DOMAINS, APP_VERSION, APP_SECRET_KEY
+from secure_browser.core.config import ALLOWED_DOMAINS, APP_VERSION, get_app_secret_key
 from secure_browser.ui.browser_engine import SecurePage
 from secure_browser.ui.college_selector import CollegeSelectorWidget
-from secure_browser.network.request_signer import HmacRequestInterceptor
+from secure_browser.network.netheaders import HmacRequestInterceptor
 from secure_browser.network.wifi_manager import WiFiManager
 from PyQt6.QtWebEngineCore import QWebEngineProfile
 
@@ -34,7 +34,9 @@ class SecureBrowser(QMainWindow):
         self.proxy_routes = proxy_routes or {}
         self._active_college = None
 
-        self.interceptor = HmacRequestInterceptor(APP_SECRET_KEY, parent=self)
+        _key = get_app_secret_key()
+        self.interceptor = HmacRequestInterceptor(_key, parent=self)
+        del _key  # don't keep the plaintext key sitting in this scope
         QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(self.interceptor)
 
         self.setup_ui()
